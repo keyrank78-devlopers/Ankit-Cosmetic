@@ -14,9 +14,9 @@ export const AuthLayout = ({ children }) => {
           />
         </div>
 
-        <div className="shrink-0 pt-3 text-sm font-medium text-slate-500">
+        {/* <div className="shrink-0 pt-3 text-sm font-medium text-slate-500">
           &copy; {new Date().getFullYear()} AK Techs. All rights reserved.
-        </div>
+        </div> */}
       </div>
 
       {/* Right Panel - Auth Form */}
