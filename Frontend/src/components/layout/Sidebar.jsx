@@ -3,6 +3,7 @@ import { NavLink, useLocation, useNavigate } from "react-router-dom";
 import { ChevronDown, PanelLeftClose, PanelLeftOpen } from "lucide-react";
 import { cn } from "../../utils/cn";
 import { useVisibleNav } from "./useVisibleNav";
+import logo from "../../assets/logo.png";
 
 function NavEntry({ item, collapsed, onNavigate }) {
   const location = useLocation();
@@ -96,18 +97,21 @@ export function Sidebar({ collapsed, setCollapsed, onNavigate }) {
         collapsed ? "w-[72px]" : "w-64"
       )}
     >
-      <div className="flex h-16 shrink-0 items-center justify-between border-b border-white/10 px-4">
-        {!collapsed && (
-          <span className="truncate text-lg font-bold text-white">
-            AK Techs
-          </span>
-        )}
+      <div className={cn(
+        "flex shrink-0 items-center gap-2 border-b border-white/10",
+        collapsed ? "justify-center px-2 py-3" : "px-3 py-3"
+      )}>
+        <img
+          src={logo}
+          alt="Grandeur Net"
+          className={cn(
+            "min-w-0 object-contain",
+            collapsed ? "h-8 w-full max-w-12" : "h-auto max-h-14 w-full flex-1"
+          )}
+        />
         <button
           onClick={() => setCollapsed(!collapsed)}
-          className={cn(
-            "rounded-md p-1.5 text-slate-300 hover:bg-white/10 hover:text-white transition-colors",
-            collapsed && "mx-auto"
-          )}
+          className="shrink-0 rounded-md p-1.5 text-slate-300 transition-colors hover:bg-white/10 hover:text-white"
         >
           {collapsed ? <PanelLeftOpen size={20} /> : <PanelLeftClose size={20} />}
         </button>

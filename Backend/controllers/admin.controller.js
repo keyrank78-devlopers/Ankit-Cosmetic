@@ -147,10 +147,13 @@ const createEmployee = async (req, res, next) => {
         }
 
         let reportingManager = null;
-        try {
-            reportingManager = await assertReportingManager(req.body.reportingManager, null);
-        } catch (error) {
-            return res.status(error.status || 400).json({ success: false, message: error.message });
+        const managerValue = req.body.reportingManager;
+        if (managerValue !== undefined && managerValue !== null && String(managerValue).trim() !== "") {
+            try {
+                reportingManager = await assertReportingManager(managerValue, null);
+            } catch (error) {
+                return res.status(error.status || 400).json({ success: false, message: error.message });
+            }
         }
 
         const employeeId = await generateId("EMP");
@@ -169,7 +172,7 @@ const createEmployee = async (req, res, next) => {
                 role,
                 department: dept._id,
                 designation: desig._id,
-                reportingManager,
+                ...(reportingManager ? { reportingManager } : {}),
                 permissions,
                 documents,
             });
@@ -311,7 +314,7 @@ const getEmployeeById = async (req, res, next) => {
 const updateEmployee = async (req, res, next) => {
     try {
         const { id } = req.params;
-        const { name, phone, address, role, department, designation, permissions, removeDocumentIds } = req.body;
+        const { name, phone, password, address, role, department, designation, permissions, removeDocumentIds } = req.body;
 
         const employee = await User.findById(id);
         if (!employee || employee.userType !== "EMPLOYEE") {
@@ -327,15 +330,26 @@ const updateEmployee = async (req, res, next) => {
 
         if (name) employee.name = name;
         if (phone) employee.phone = phone;
+        if (typeof password === "string" && password.trim()) {
+            if (password.trim().length < 6) {
+                return res.status(400).json({ success: false, message: "Password must be at least 6 characters" });
+            }
+            employee.password = password;
+        }
         if (address) employee.address = address;
         if (role) employee.role = role;
         if (department) employee.department = department;
         if (designation) employee.designation = designation;
         if (Object.prototype.hasOwnProperty.call(req.body, "reportingManager")) {
-            try {
-                employee.reportingManager = await assertReportingManager(req.body.reportingManager, employee._id);
-            } catch (error) {
-                return res.status(error.status || 400).json({ success: false, message: error.message });
+            const managerValue = req.body.reportingManager;
+            if (managerValue === undefined || managerValue === null || String(managerValue).trim() === "") {
+                employee.reportingManager = null;
+            } else {
+                try {
+                    employee.reportingManager = await assertReportingManager(managerValue, employee._id);
+                } catch (error) {
+                    return res.status(error.status || 400).json({ success: false, message: error.message });
+                }
             }
         }
         if (permissions) employee.permissions = permissions;

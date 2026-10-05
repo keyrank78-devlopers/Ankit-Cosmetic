@@ -6,6 +6,7 @@ import { useAuth } from "../../context/AuthContext";
 import { useNavigate } from "react-router-dom";
 import axios from "axios";
 import { TopNav } from "./TopNav";
+import logo from "../../assets/logo.png";
 
 export function Header({ setMobileMenuOpen, isMobile, navLayout = "sidebar", onToggleLayout }) {
   const { user, logout, token } = useAuth();
@@ -60,7 +61,13 @@ export function Header({ setMobileMenuOpen, isMobile, navLayout = "sidebar", onT
 
       {isMobile && <div className="h-6 w-px bg-slate-200 lg:hidden" aria-hidden="true" />}
 
-      {navbar && <span className="shrink-0 text-lg font-bold text-slate-900">AK Techs</span>}
+      {navbar && (
+        <img
+          src={logo}
+          alt="Grandeur Net"
+          className="h-10 w-auto max-w-[9.5rem] shrink-0 object-contain sm:h-12 sm:max-w-[11rem]"
+        />
+      )}
       {navbar && <TopNav />}
 
       <div className={cn("flex items-center gap-x-4 self-stretch lg:gap-x-6", navbar ? "shrink-0" : "flex-1 justify-end")}>

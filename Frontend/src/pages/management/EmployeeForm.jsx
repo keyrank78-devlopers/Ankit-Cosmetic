@@ -1,6 +1,6 @@
 import { useState, useEffect } from "react";
 import { useNavigate, useParams } from "react-router-dom";
-import { ArrowLeft, ExternalLink, FileText, Plus, Trash2 } from "lucide-react";
+import { ArrowLeft, ExternalLink, Eye, EyeOff, FileText, Plus, Trash2 } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Input } from "../../components/ui/Input";
 import api from "../../services/api";
@@ -38,17 +38,21 @@ export function EmployeeForm() {
   const [documentRows, setDocumentRows] = useState([]);
   const [isLoading, setIsLoading] = useState(false);
   const [isFetching, setIsFetching] = useState(isEditMode);
+  const [showPassword, setShowPassword] = useState(false);
 
   // Fetch departments and employee details if in edit mode
   useEffect(() => {
     const fetchInitialData = async () => {
       try {
-        const [deptRes, managerRes] = await Promise.all([
-          api.get("/admin/departments/list", { params: { status: "ACTIVE", limit: 100 } }),
-          api.get("/admin/employees/list", { params: { picker: "1" } }),
-        ]);
+        const deptRes = await api.get("/admin/departments/list", { params: { status: "ACTIVE", limit: 100 } });
         setDepartments(deptRes.data.data || []);
-        let people = managerRes.data.data || [];
+        let people = [];
+        try {
+          const managerRes = await api.get("/admin/employees/list", { params: { picker: "1" } });
+          people = managerRes.data.data || [];
+        } catch (error) {
+          console.error("Failed to fetch reporting managers", error);
+        }
 
         if (isEditMode) {
           const empRes = await api.get(`/admin/employees/details/${id}`);
@@ -157,6 +161,8 @@ export function EmployeeForm() {
       payload.append("address", JSON.stringify(formData.address));
       if (!isEditMode) {
         payload.append("email", formData.email);
+      }
+      if (!isEditMode || formData.password) {
         payload.append("password", formData.password);
       }
       if (filledRows.length) {
@@ -225,7 +231,27 @@ export function EmployeeForm() {
                 <label className="block text-sm font-medium text-slate-700 mb-1">
                   {isEditMode ? "Password (leave blank to keep current)" : "Password *"}
                 </label>
-                <Input name="password" type="password" value={formData.password} onChange={handleChange} required={!isEditMode} disabled={isLoading} />
+                <div className="relative">
+                  <Input
+                    name="password"
+                    type={showPassword ? "text" : "password"}
+                    value={formData.password}
+                    onChange={handleChange}
+                    required={!isEditMode}
+                    disabled={isLoading}
+                    autoComplete="new-password"
+                    className="pr-10"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setShowPassword((prev) => !prev)}
+                    className="absolute right-2 top-1/2 -translate-y-1/2 rounded-sm p-1 text-slate-500 hover:text-slate-700 focus:outline-none focus-visible:ring-2 focus-visible:ring-indigo-600 disabled:opacity-50"
+                    aria-label={showPassword ? "Hide password" : "Show password"}
+                    disabled={isLoading}
+                  >
+                    {showPassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+                  </button>
+                </div>
               </div>
             </div>
           </div>
@@ -266,7 +292,8 @@ export function EmployeeForm() {
                 </select>
               </div>
               <div className="sm:col-span-2">
-                <label className="block text-sm font-medium text-slate-700 mb-1">Reports to</label>
+                <label className="block text-sm font-medium text-slate-700 mb-1">Reports to (optional)</label>
+                <p className="mb-2 text-xs text-slate-500">Manager nahi hai to blank chhod do. Pehla employee bina reporting manager ke save ho sakta hai.</p>
                 <Input
                   value={managerSearch}
                   placeholder="Search manager by name or ID"
