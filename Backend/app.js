@@ -14,8 +14,8 @@ const setupSwagger = require("./config/swagger");
 const app = express();
 
 // ─── Trust Proxy ────────────────────────────────────────────────────────────
-// Only trust first proxy hop (NGINX / Cloudflare / ALB in production)
-app.set("trust proxy", process.env.NODE_ENV === "production" ? 1 : false);
+
+app.set("trust proxy", 1);
 
 // ─── Database ────────────────────────────────────────────────────────────────
 connectDB();
