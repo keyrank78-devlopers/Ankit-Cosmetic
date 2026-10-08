@@ -16,6 +16,7 @@ const TYPES = [
   { value: "DAMAGE", label: "Damage" },
   { value: "EXPIRY", label: "Expiry" },
   { value: "RETURN", label: "Return" },
+  { value: "OTHER", label: "Other" },
   { value: "OPENING", label: "Opening" },
 ];
 
@@ -25,6 +26,7 @@ const TYPE_LABEL = {
   DAMAGE: "Damage",
   EXPIRY: "Expiry",
   RETURN: "Return",
+  OTHER: "Other",
   OPENING: "Opening",
 };
 

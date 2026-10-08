@@ -7,13 +7,25 @@ const financialYear = (date = new Date()) => {
 };
 
 const nextCustomerCode = async () => {
+    const [code] = await reserveCustomerCodes(1);
+    return code;
+};
+
+const reserveCustomerCodes = async (count) => {
+    const total = Math.max(parseInt(count, 10) || 0, 0);
+    if (!total) return [];
     const year = financialYear();
     const counter = await Counter.findOneAndUpdate(
         { id: `CUS-${year}` },
-        { $inc: { seq: 1 } },
+        { $inc: { seq: total } },
         { returnDocument: "after", upsert: true }
     );
-    return `cus${year}-${String(counter.seq).padStart(4, "0")}`;
+    const start = counter.seq - total + 1;
+    const codes = new Array(total);
+    for (let index = 0; index < total; index += 1) {
+        codes[index] = `cus${year}-${String(start + index).padStart(4, "0")}`;
+    }
+    return codes;
 };
 
 const nextOrderCode = async (date = new Date()) => {
@@ -26,4 +38,4 @@ const nextOrderCode = async (date = new Date()) => {
     return `Order ${year}-${String(counter.seq).padStart(4, "0")}`;
 };
 
-module.exports = { financialYear, nextCustomerCode, nextOrderCode };
+module.exports = { financialYear, nextCustomerCode, reserveCustomerCodes, nextOrderCode };

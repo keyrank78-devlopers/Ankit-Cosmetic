@@ -1,5 +1,6 @@
 import { useState, useEffect } from "react";
 import { Plus, Search, Edit2, Eye, ShieldOff, Shield, Trash2 } from "lucide-react";
+import { ExportButton } from "../../components/export/ExportButton";
 import { Button } from "../../components/ui/Button";
 import { Input } from "../../components/ui/Input";
 import api from "../../services/api";
@@ -104,12 +105,15 @@ export function Employees() {
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Employees</h1>
           <p className="text-sm text-slate-500 mt-1">Manage all employees in your organization.</p>
         </div>
-        {(hasPermission("MANAGE_EMPLOYEES") || hasPermission("CREATE_EMPLOYEES")) && (
-          <Button onClick={openCreatePage}>
-            <Plus className="mr-2 h-4 w-4" />
-            Add Employee
-          </Button>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <ExportButton type="EMPLOYEES" filters={{ search, department: departmentFilter, designation: designationFilter, manager: managerFilter }} />
+          {(hasPermission("MANAGE_EMPLOYEES") || hasPermission("CREATE_EMPLOYEES")) && (
+            <Button onClick={openCreatePage}>
+              <Plus className="mr-2 h-4 w-4" />
+              Add Employee
+            </Button>
+          )}
+        </div>
       </div>
 
       <div className="flex flex-col sm:flex-row gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-200">

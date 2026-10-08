@@ -28,7 +28,7 @@ const buildScheme = async (body, excludeId) => {
     const type = body.type;
 
     if (name.length < 2 || name.length > 80) return fail(400, "Scheme name must be 2 to 80 characters");
-    if (!Scheme.SCHEME_TYPES.includes(type)) return fail(400, "Scheme type must be SLAB, OPEN, or FIRST_ORDER");
+    if (!["SLAB", "OPEN"].includes(type)) return fail(400, "Scheme type must be SLAB or OPEN");
 
     const nameTaken = await Scheme.findOne({
         name: { $regex: `^${escapeRegex(name)}$`, $options: "i" },
@@ -75,18 +75,6 @@ const buildScheme = async (body, excludeId) => {
         value.slabs = parsed.sort((a, b) => a.minAmount - b.minAmount);
         unset.minAmount = "";
         unset.gifts = "";
-    }
-
-    if (type === "FIRST_ORDER") {
-        const gifts = uniqueIds(body.gifts);
-        if (!gifts.length) return fail(400, "Select at least one gift for the first order");
-        if (invalidGiftIds(gifts).length) return fail(400, "One or more gifts are invalid");
-        if ((await missingGifts(gifts)).length) {
-            return fail(400, "One or more gifts were not found. Create the gift first.");
-        }
-        value.gifts = gifts;
-        unset.slabs = "";
-        unset.minAmount = "";
     }
 
     return { value, unset };

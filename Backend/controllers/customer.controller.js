@@ -4,6 +4,7 @@ const Order = require("../models/Order");
 const FollowUp = require("../models/FollowUp");
 const User = require("../models/User");
 const { nextCustomerCode } = require("../utils/customerCode");
+const { SAMPLE, receiveCustomerCsv, importCustomers } = require("../utils/customerImport");
 const { downlineIds } = require("../utils/reporting");
 
 const STAGES = ["NEW", "ASSIGNED", "FOLLOW_UP", "CONVERTED", "LOST"];
@@ -434,8 +435,34 @@ const addFollowUp = async (req, res, next) => {
     }
 };
 
+const customerSample = (req, res) => {
+    res.setHeader("Content-Type", "text/csv; charset=utf-8");
+    res.setHeader("Content-Disposition", "attachment; filename=\"customer-sample.csv\"");
+    res.send(SAMPLE);
+};
+
+const importCustomerFile = async (req, res, next) => {
+    try {
+        if (!req.file?.buffer?.length) {
+            return res.status(400).json({ success: false, message: "Choose a CSV file" });
+        }
+        const result = await importCustomers(req.file.buffer.toString("utf8"), req.user._id);
+        const message = result.added
+            ? `${result.added} customer${result.added === 1 ? "" : "s"} added${result.skipped ? `, ${result.skipped} skipped` : ""}`
+            : "No customers were added";
+        res.status(result.added ? 201 : 400).json({ success: Boolean(result.added), message, data: result });
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+        if (error.code === 11000) return res.status(409).json({ success: false, message: "A phone number in the file is already saved" });
+        next(error);
+    }
+};
+
 module.exports = {
     allowCustomer,
+    receiveCustomerCsv,
+    customerSample,
+    importCustomerFile,
     createCustomer,
     getCustomers,
     getCustomerById,

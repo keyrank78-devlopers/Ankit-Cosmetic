@@ -1,6 +1,7 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate, useSearchParams } from "react-router-dom";
-import { Plus, Search, Edit2, Trash2, UserPlus, Users, ClipboardList, PhoneCall } from "lucide-react";
+import { Plus, Search, Edit2, Trash2, UserPlus, Users, ClipboardList, PhoneCall, Upload, Download } from "lucide-react";
+import { ExportButton } from "../../components/export/ExportButton";
 import { Button } from "../../components/ui/Button";
 import { Input } from "../../components/ui/Input";
 import customerService from "../../services/customerService";
@@ -64,6 +65,9 @@ export function Customers() {
   const [total, setTotal] = useState(0);
   const [editingId, setEditingId] = useState(null);
   const [form, setForm] = useState(emptyForm);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const fileRef = useRef(null);
 
   const canCreate = hasPermission("CREATE_CUSTOMERS");
   const canEdit = hasPermission("EDIT_CUSTOMERS");
@@ -196,6 +200,40 @@ export function Customers() {
     }
   };
 
+  const downloadSample = async () => {
+    try {
+      const response = await customerService.downloadSample();
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "customer-sample.csv";
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Could not download the sample");
+    }
+  };
+
+  const uploadCustomers = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    setImporting(true);
+    try {
+      const res = await customerService.importCustomers(file);
+      setImportResult(res.data);
+      toast.success(res.message || "Customers added");
+      setPage(1);
+      fetchCustomers();
+    } catch (error) {
+      const body = error.response?.data;
+      if (body?.data) setImportResult(body.data);
+      toast.error(body?.message || "Could not upload customers");
+    } finally {
+      setImporting(false);
+    }
+  };
+
   return (
     <div className="space-y-6">
       <div className="flex flex-col sm:flex-row sm:items-center sm:justify-between gap-4">
@@ -203,11 +241,16 @@ export function Customers() {
           <h1 className="text-2xl font-bold text-slate-900 tracking-tight">Customers</h1>
           <p className="text-sm text-slate-500 mt-1">A customer is a lead. Field staff add it here, then call, follow up, or place an order.</p>
         </div>
-        {canCreate && tab === "existing" && (
-          <Button onClick={openNew}>
-            <Plus className="mr-2 h-4 w-4" />
-            New Customer
-          </Button>
+        {tab === "existing" && (
+          <div className="flex flex-wrap items-center gap-2">
+            <ExportButton type="CUSTOMERS" filters={{ search: debouncedSearch, ...debouncedFilters }} />
+            {canCreate && (
+              <Button onClick={openNew}>
+                <Plus className="mr-2 h-4 w-4" />
+                New Customer
+              </Button>
+            )}
+          </div>
         )}
       </div>
 
@@ -243,6 +286,39 @@ export function Customers() {
 
       {tab === "existing" ? (
         <>
+          {canCreate && (
+            <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+              <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+                <div>
+                  <p className="text-sm font-medium text-slate-900">Bulk add</p>
+                  <p className="text-xs text-slate-500">Download the sample, fill up to 1,00,000 customers, then upload the CSV. Duplicate phones are skipped.</p>
+                </div>
+                <div className="flex flex-wrap gap-2">
+                  <Button type="button" variant="outline" onClick={downloadSample}>
+                    <Download className="mr-2 h-4 w-4" />
+                    Sample CSV
+                  </Button>
+                  <Button type="button" disabled={importing} onClick={() => fileRef.current?.click()}>
+                    <Upload className="mr-2 h-4 w-4" />
+                    {importing ? "Uploading..." : "Upload CSV"}
+                  </Button>
+                  <input ref={fileRef} type="file" accept=".csv,text/csv" className="hidden" onChange={uploadCustomers} />
+                </div>
+              </div>
+              {importResult && (
+                <div className="mt-3 text-sm text-slate-600">
+                  <p>Added {importResult.added || 0}. Skipped {importResult.skipped || 0}.</p>
+                  {(importResult.errors || []).length > 0 && (
+                    <ul className="mt-2 max-h-32 space-y-1 overflow-y-auto text-xs text-red-600">
+                      {importResult.errors.map((item) => (
+                        <li key={`${item.row}-${item.message}`}>Row {item.row}: {item.message}</li>
+                      ))}
+                    </ul>
+                  )}
+                </div>
+              )}
+            </div>
+          )}
           <div className="grid gap-4 bg-white p-4 rounded-xl shadow-sm border border-slate-200 sm:grid-cols-2 lg:grid-cols-4">
             <div className="relative sm:col-span-2 lg:col-span-1">
               <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-slate-400" />

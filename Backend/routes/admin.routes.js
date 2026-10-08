@@ -21,7 +21,7 @@ const {
 // Middlewares & Validators
 const { registerValidator } = require("../validators/auth.validator");
 const validate = require("../middlewares/validate.middleware");
-const { receiveEmployeeDocuments } = require("../config/cloudinary");
+const { receiveEmployeeDocuments, receivePaymentQr } = require("../config/cloudinary");
 const { authenticate, authorize, checkPermission } = require("../middlewares/auth.middleware");
 const {
     allowCustomer,
@@ -34,6 +34,9 @@ const {
     assignLead,
     getFollowUps,
     addFollowUp,
+    receiveCustomerCsv,
+    customerSample,
+    importCustomerFile,
 } = require("../controllers/customer.controller");
 const { createCustomerValidator, updateCustomerValidator } = require("../validators/customer.validator");
 const { receiveGiftImage, createGift, getGifts, getGiftById, updateGift, updateGiftStock, deleteGift } = require("../controllers/gift.controller");
@@ -54,14 +57,19 @@ const {
     customerHistory,
     listOrders,
     revenue,
-    createOnlinePayment,
-    verifyOnlinePayment,
+    getPaymentQr,
+    setPaymentQr,
+    addPaymentPromise,
+    updatePaymentPromise,
+    deletePaymentPromise,
     updateOrderStatus,
     getDashboard,
     getReimbursements,
+    getExpiryStock,
     getWarehouseReport,
 } = require("../controllers/order.controller");
 const { getTargets, setTarget, getTargetOrders } = require("../controllers/target.controller");
+const { downloadDirect, requestExport, myExport, listExports, reviewExport, downloadApproved } = require("../controllers/export.controller");
 
 /**
  * @swagger
@@ -1038,6 +1046,7 @@ router.patch("/products/status/:id", changeProductStatus);
 router.patch("/products/stock/:id", updateProductStock);
 
 const { getInventory, getInventoryHistory, postInventoryEntry, patchInventoryEntry, deleteInventoryEntry } = require("../controllers/inventory.controller");
+router.get("/inventory/expiry", checkPermission("VIEW_INVENTORY", "MANAGE_INVENTORY", "EDIT_PRODUCTS"), getExpiryStock);
 router.get("/inventory", checkPermission("VIEW_INVENTORY", "MANAGE_INVENTORY", "EDIT_PRODUCTS"), getInventory);
 router.get("/inventory/history", checkPermission("VIEW_INVENTORY", "MANAGE_INVENTORY", "EDIT_PRODUCTS"), getInventoryHistory);
 router.post("/inventory/entry", checkPermission("MANAGE_INVENTORY", "EDIT_PRODUCTS"), postInventoryEntry);
@@ -1047,6 +1056,8 @@ router.delete("/inventory/entry/:id", checkPermission("MANAGE_INVENTORY", "EDIT_
 // Customers (leads). Admin and Field Executive always pass.
 // A sales manager (or any employee) can do an action only after admin grants that permission.
 router.post("/customers", allowCustomer("CREATE_CUSTOMERS"), createCustomerValidator, validate, createCustomer);
+router.get("/customers/import-sample", allowCustomer("CREATE_CUSTOMERS"), customerSample);
+router.post("/customers/import", allowCustomer("CREATE_CUSTOMERS"), receiveCustomerCsv, importCustomerFile);
 router.get("/customers", allowCustomer("VIEW_CUSTOMERS"), getCustomers);
 router.get("/customers/assignees", allowCustomer("ASSIGN_LEADS"), listAssignees);
 router.put("/customers/:id/assign", allowCustomer("ASSIGN_LEADS"), assignLead);
@@ -1087,9 +1098,19 @@ router.put("/orders/:id/scheme", allowCustomer("PLACE_ORDERS"), setScheme);
 router.put("/orders/:id/expiry", allowCustomer("PLACE_ORDERS"), setExpiry);
 router.post("/orders/:id/place", allowCustomer("PLACE_ORDERS"), placeOrder);
 router.post("/orders/:id/cancel", allowCustomer("PLACE_ORDERS"), cancelOrder);
-router.post("/orders/:id/pay", allowCustomer("PLACE_ORDERS"), createOnlinePayment);
-router.post("/orders/:id/pay/verify", allowCustomer("PLACE_ORDERS"), verifyOnlinePayment);
+router.get("/settings/payment-qr", allowCustomer("PLACE_ORDERS", "VIEW_ORDERS"), getPaymentQr);
+router.put("/settings/payment-qr", authorize("ADMIN"), receivePaymentQr, setPaymentQr);
+router.post("/orders/:id/promises", allowCustomer("PLACE_ORDERS", "UPDATE_ORDER_STATUS"), addPaymentPromise);
+router.patch("/orders/:id/promises/:promiseId", allowCustomer("PLACE_ORDERS", "UPDATE_ORDER_STATUS"), updatePaymentPromise);
+router.delete("/orders/:id/promises/:promiseId", allowCustomer("PLACE_ORDERS", "UPDATE_ORDER_STATUS"), deletePaymentPromise);
 router.patch("/orders/:id/status", allowCustomer("UPDATE_ORDER_STATUS"), updateOrderStatus);
 router.delete("/orders/:id", allowCustomer("DELETE_ORDERS"), deleteOrder);
+
+router.get("/exports/file", authorize("ADMIN"), downloadDirect);
+router.post("/exports/request", requestExport);
+router.get("/exports/mine", myExport);
+router.get("/exports", authorize("ADMIN"), listExports);
+router.patch("/exports/:id", authorize("ADMIN"), reviewExport);
+router.get("/exports/:id/file", downloadApproved);
 
 module.exports = router;

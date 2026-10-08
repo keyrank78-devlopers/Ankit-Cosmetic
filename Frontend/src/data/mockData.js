@@ -17,8 +17,11 @@ import {
   Building,
   Briefcase,
   ShieldCheck,
+  FileSpreadsheet,
   Gift,
   BadgePercent,
+  QrCode,
+  Archive,
 } from "lucide-react";
 
 export const navigationData = [
@@ -34,9 +37,11 @@ export const navigationData = [
       { name: "Departments", href: "/dashboard/departments", icon: Building, allowedRoles: ["ADMIN", "EMPLOYEE"], permissionsNeeded: ["MANAGE_DEPARTMENTS", "VIEW_DEPARTMENTS", "CREATE_DEPARTMENTS", "EDIT_DEPARTMENTS", "DELETE_DEPARTMENTS"] },
       { name: "Designations", href: "/dashboard/designations", icon: Briefcase, allowedRoles: ["ADMIN", "EMPLOYEE"], permissionsNeeded: ["MANAGE_DESIGNATIONS", "VIEW_DESIGNATIONS", "CREATE_DESIGNATIONS", "EDIT_DESIGNATIONS", "DELETE_DESIGNATIONS"] },
       { name: "Permissions", href: "/dashboard/permissions", icon: ShieldCheck, allowedRoles: ["ADMIN"], permissionsNeeded: ["MANAGE_PERMISSIONS"] },
+      { name: "Export requests", href: "/dashboard/exports", icon: FileSpreadsheet, allowedRoles: ["ADMIN"] },
       { name: "Employees", href: "/dashboard/employees", icon: Building2, allowedRoles: ["ADMIN", "EMPLOYEE"], permissionsNeeded: ["VIEW_EMPLOYEES", "MANAGE_EMPLOYEES", "CREATE_EMPLOYEES", "EDIT_EMPLOYEES", "DELETE_EMPLOYEES"] },
       { name: "Customers", href: "/dashboard/customers", icon: Users, allowedRoles: ["ADMIN", "EMPLOYEE", "FIELD_EXECUTIVE"], permissionsNeeded: ["VIEW_CUSTOMERS"] },
       { name: "Place Order", href: "/dashboard/orders/new", icon: ShoppingCart, allowedRoles: ["ADMIN", "EMPLOYEE", "FIELD_EXECUTIVE"], permissionsNeeded: ["PLACE_ORDERS"] },
+      { name: "Payment QR", href: "/dashboard/payment-qr", icon: QrCode, allowedRoles: ["ADMIN"] },
       { name: "Orders", href: "/dashboard/orders", icon: ClipboardList, allowedRoles: ["ADMIN", "EMPLOYEE", "FIELD_EXECUTIVE"], permissionsNeeded: ["VIEW_ORDERS"] },
       { name: "Reimbursements", href: "/dashboard/orders/reimbursements", icon: Undo2, allowedRoles: ["ADMIN", "EMPLOYEE", "FIELD_EXECUTIVE"], permissionsNeeded: ["VIEW_REIMBURSEMENTS"] },
       { name: "Delivery report", href: "/dashboard/orders/warehouse", icon: Truck, allowedRoles: ["ADMIN", "EMPLOYEE", "FIELD_EXECUTIVE"], permissionsNeeded: ["VIEW_DELIVERY"] },
@@ -64,6 +69,7 @@ export const navigationData = [
     items: [
       { name: "Products", href: "/dashboard/products", icon: Package, allowedRoles: ["ADMIN", "EMPLOYEE", "VENDOR"], permissionsNeeded: ["VIEW_PRODUCTS"] },
       { name: "Inventory", href: "/dashboard/inventory", icon: Warehouse, allowedRoles: ["ADMIN", "EMPLOYEE"], permissionsNeeded: ["VIEW_INVENTORY"] },
+      { name: "Expiry stock", href: "/dashboard/inventory/expiry", icon: Archive, allowedRoles: ["ADMIN", "EMPLOYEE"], permissionsNeeded: ["VIEW_INVENTORY"] },
       { name: "Stock entry", href: "/dashboard/inventory/entry", icon: PackagePlus, allowedRoles: ["ADMIN", "EMPLOYEE"], permissionsNeeded: ["MANAGE_INVENTORY", "EDIT_PRODUCTS"] },
       { name: "Stock history", href: "/dashboard/inventory/history", icon: History, allowedRoles: ["ADMIN", "EMPLOYEE"], permissionsNeeded: ["VIEW_INVENTORY"] },
     ],

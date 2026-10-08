@@ -33,12 +33,24 @@ const orderService = {
     const response = await api.post(`/admin/orders/${orderId}/place`, data);
     return response.data;
   },
-  createPayment: async (orderId, data) => {
-    const response = await api.post(`/admin/orders/${orderId}/pay`, data || {});
+  paymentQr: async () => {
+    const response = await api.get("/admin/settings/payment-qr");
     return response.data;
   },
-  verifyPayment: async (orderId, data) => {
-    const response = await api.post(`/admin/orders/${orderId}/pay/verify`, data);
+  uploadPaymentQr: async (formData) => {
+    const response = await api.put("/admin/settings/payment-qr", formData);
+    return response.data;
+  },
+  addPromise: async (orderId, data) => {
+    const response = await api.post(`/admin/orders/${orderId}/promises`, data);
+    return response.data;
+  },
+  updatePromise: async (orderId, promiseId, data) => {
+    const response = await api.patch(`/admin/orders/${orderId}/promises/${promiseId}`, data);
+    return response.data;
+  },
+  removePromise: async (orderId, promiseId) => {
+    const response = await api.delete(`/admin/orders/${orderId}/promises/${promiseId}`);
     return response.data;
   },
   updateStatus: async (orderId, status) => {
@@ -59,6 +71,10 @@ const orderService = {
   },
   reimbursements: async (params) => {
     const response = await api.get("/admin/orders/reimbursements", { params });
+    return response.data;
+  },
+  expiryStock: async (params) => {
+    const response = await api.get("/admin/inventory/expiry", { params });
     return response.data;
   },
   warehouse: async (params) => {

@@ -18,6 +18,18 @@ const customerService = {
     return response.data;
   },
 
+  downloadSample: async () => {
+    const response = await api.get(`${BASE_URL}/import-sample`, { responseType: "blob" });
+    return response;
+  },
+
+  importCustomers: async (file) => {
+    const body = new FormData();
+    body.append("file", file);
+    const response = await api.post(`${BASE_URL}/import`, body);
+    return response.data;
+  },
+
   updateCustomer: async (id, data) => {
     const response = await api.put(`${BASE_URL}/${id}`, data);
     return response.data;

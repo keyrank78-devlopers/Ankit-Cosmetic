@@ -42,6 +42,37 @@ const uploadGiftImage = multer({
     },
 });
 
+const qrStorage = new CloudinaryStorage({
+    cloudinary: cloudinary,
+    params: {
+        folder: "crm/payment-qr",
+        allowed_formats: ["jpg", "jpeg", "png", "webp", "avif"],
+    },
+});
+
+const uploadPaymentQrFile = multer({
+    storage: qrStorage,
+    limits: { fileSize: 5 * 1024 * 1024 },
+    fileFilter: (req, file, cb) => {
+        if (!giftImageTypes.has(file.mimetype)) {
+            const error = new Error("QR image must be a jpg, png, webp, or avif file");
+            error.status = 400;
+            return cb(error);
+        }
+        cb(null, true);
+    },
+});
+
+const receivePaymentQr = (req, res, next) => {
+    uploadPaymentQrFile.single("image")(req, res, (error) => {
+        if (!error) return next();
+        const message = error.code === "LIMIT_FILE_SIZE"
+            ? "QR image must be 5 MB or smaller"
+            : error.message || "Could not read the QR image";
+        return res.status(400).json({ success: false, message });
+    });
+};
+
 const employeeDocTypes = new Set(["image/jpeg", "image/png", "image/webp", "image/avif", "application/pdf"]);
 
 const uploadEmployeeDocuments = multer({
@@ -83,6 +114,7 @@ const destroyCloudinaryFile = (publicId, resourceType) => {
 
 module.exports = upload;
 module.exports.uploadGiftImage = uploadGiftImage;
+module.exports.receivePaymentQr = receivePaymentQr;
 module.exports.receiveEmployeeDocuments = receiveEmployeeDocuments;
 module.exports.uploadEmployeeFile = uploadEmployeeFile;
 module.exports.destroyCloudinaryFile = destroyCloudinaryFile;

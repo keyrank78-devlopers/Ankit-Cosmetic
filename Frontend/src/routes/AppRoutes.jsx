@@ -12,6 +12,7 @@ import { Products } from "../pages/business/Products";
 import { ProductForm } from "../pages/business/ProductForm";
 import { ProductView } from "../pages/business/ProductView";
 import { Inventory } from "../pages/business/Inventory";
+import { ExpiryStock } from "../pages/business/ExpiryStock";
 import { StockEntry } from "../pages/business/StockEntry";
 import { StockHistory } from "../pages/business/StockHistory";
 import { Customers } from "../pages/management/Customers";
@@ -20,11 +21,13 @@ import { Employees } from "../pages/management/Employees";
 import { EmployeeForm } from "../pages/management/EmployeeForm";
 import { EmployeeProfile } from "../pages/management/EmployeeProfile";
 import { Permissions } from "../pages/management/Permissions";
+import { ExportRequests } from "../pages/management/ExportRequests";
 import { Gifts } from "../pages/schemes/Gifts";
 import { GiftForm } from "../pages/schemes/GiftForm";
 import { SchemeCreate } from "../pages/schemes/SchemeCreate";
 import { Schemes } from "../pages/schemes/Schemes";
 import { PlaceOrder } from "../pages/orders/PlaceOrder";
+import { PaymentQr } from "../pages/orders/PaymentQr";
 import { Orders } from "../pages/orders/Orders";
 import { OrderDetails } from "../pages/orders/OrderDetails";
 import { CustomerHistory } from "../pages/orders/CustomerHistory";
@@ -80,6 +83,7 @@ export const AppRoutes = () => {
         <Route path="departments" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE"]} permissionsNeeded={["MANAGE_DEPARTMENTS", "VIEW_DEPARTMENTS", "CREATE_DEPARTMENTS", "EDIT_DEPARTMENTS", "DELETE_DEPARTMENTS"]}><Departments /></RoleRoute>} />
         <Route path="designations" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE"]} permissionsNeeded={["MANAGE_DESIGNATIONS", "VIEW_DESIGNATIONS", "CREATE_DESIGNATIONS", "EDIT_DESIGNATIONS", "DELETE_DESIGNATIONS"]}><Designations /></RoleRoute>} />
         <Route path="permissions" element={<RoleRoute allowedRoles={["ADMIN"]} permissionsNeeded={["MANAGE_PERMISSIONS"]}><Permissions /></RoleRoute>} />
+        <Route path="exports" element={<RoleRoute allowedRoles={["ADMIN"]}><ExportRequests /></RoleRoute>} />
 
         <Route path="customers" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE", "FIELD_EXECUTIVE"]} permissionsNeeded={["VIEW_CUSTOMERS"]}><Customers /></RoleRoute>} />
         <Route path="customers/:id" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE", "FIELD_EXECUTIVE"]} permissionsNeeded={["VIEW_CUSTOMERS"]}><Lead /></RoleRoute>} />
@@ -87,6 +91,7 @@ export const AppRoutes = () => {
         <Route path="orders/reimbursements" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE", "FIELD_EXECUTIVE"]} permissionsNeeded={["VIEW_REIMBURSEMENTS"]}><ReimbursementReport /></RoleRoute>} />
         <Route path="orders/warehouse" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE", "FIELD_EXECUTIVE"]} permissionsNeeded={["VIEW_DELIVERY"]}><WarehouseReport /></RoleRoute>} />
         <Route path="orders/new" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE", "FIELD_EXECUTIVE"]} permissionsNeeded={["PLACE_ORDERS"]}><PlaceOrder /></RoleRoute>} />
+        <Route path="payment-qr" element={<RoleRoute allowedRoles={["ADMIN"]}><PaymentQr /></RoleRoute>} />
         <Route path="orders/customer/:customerId" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE", "FIELD_EXECUTIVE"]} permissionsNeeded={["VIEW_ORDERS"]}><CustomerHistory /></RoleRoute>} />
         <Route path="orders/:id" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE", "FIELD_EXECUTIVE"]} permissionsNeeded={["VIEW_ORDERS"]}><OrderDetails /></RoleRoute>} />
         <Route path="revenue" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE", "FIELD_EXECUTIVE"]} permissionsNeeded={["VIEW_REVENUE"]}><Revenue /></RoleRoute>} />
@@ -110,6 +115,7 @@ export const AppRoutes = () => {
         <Route path="products/edit/:id" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE", "VENDOR"]} permissionsNeeded={["VIEW_PRODUCTS"]}><ProductForm /></RoleRoute>} />
         <Route path="products/view/:id" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE", "VENDOR"]} permissionsNeeded={["VIEW_PRODUCTS"]}><ProductView /></RoleRoute>} />
 
+        <Route path="inventory/expiry" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE"]} permissionsNeeded={["VIEW_INVENTORY"]}><ExpiryStock /></RoleRoute>} />
         <Route path="inventory" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE"]} permissionsNeeded={["VIEW_INVENTORY"]}><Inventory /></RoleRoute>} />
         <Route path="inventory/entry" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE"]} permissionsNeeded={["MANAGE_INVENTORY", "EDIT_PRODUCTS"]}><StockEntry /></RoleRoute>} />
         <Route path="inventory/history" element={<RoleRoute allowedRoles={["ADMIN", "EMPLOYEE"]} permissionsNeeded={["VIEW_INVENTORY"]}><StockHistory /></RoleRoute>} />

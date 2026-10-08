@@ -78,7 +78,7 @@ const PERMISSION_GROUPS = [
   {
     category: "Orders & Revenue",
     permissions: [
-      { key: "PLACE_ORDERS", label: "Place Order", desc: "Create an order, add products, and take COD or online payment" },
+      { key: "PLACE_ORDERS", label: "Place Order", desc: "Create an order, add products, show the payment QR, and save payment dates" },
       { key: "VIEW_ORDERS", label: "View Orders", desc: "Open the order list and order details. No status change, delete, or other actions" },
       { key: "UPDATE_ORDER_STATUS", label: "Update Order Status", desc: "Move an order from pending to confirm, ready, out for delivery, and delivered" },
       { key: "DELETE_ORDERS", label: "Delete Orders", desc: "Delete a placed order and release locked stock" },

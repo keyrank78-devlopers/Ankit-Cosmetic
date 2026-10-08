@@ -208,7 +208,7 @@ const postInventoryEntry = async (req, res, next) => {
     }
 };
 
-const emptySummary = () => ({ OPENING: 0, PRODUCTION: 0, SALE: 0, DAMAGE: 0, EXPIRY: 0, RETURN: 0 });
+const emptySummary = () => ({ OPENING: 0, PRODUCTION: 0, SALE: 0, DAMAGE: 0, EXPIRY: 0, RETURN: 0, OTHER: 0 });
 
 const liveStock = async (product) => {
     const [row] = await Batch.aggregate([
@@ -240,7 +240,7 @@ const getInventoryHistory = async (req, res, next) => {
         const to = String(req.query.to || "").trim();
         const productId = String(req.query.product || "").trim();
 
-        if (type && !["OPENING", "PRODUCTION", "SALE", "DAMAGE", "EXPIRY", "RETURN"].includes(type)) {
+        if (type && !["OPENING", "PRODUCTION", "SALE", "DAMAGE", "EXPIRY", "RETURN", "OTHER"].includes(type)) {
             return res.status(400).json({ success: false, message: "Choose a valid movement type" });
         }
         if ((from && !/^\d{4}-\d{2}-\d{2}$/.test(from)) || (to && !/^\d{4}-\d{2}-\d{2}$/.test(to)) || (from && to && from > to)) {

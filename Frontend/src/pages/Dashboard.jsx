@@ -27,6 +27,7 @@ const empty = {
   targets: null,
   claims: null,
   dispatched: { orders: 0, total: 0 },
+  paymentDues: null,
 };
 
 const dayLabel = (value) => {
@@ -157,6 +158,32 @@ export function Dashboard() {
           </div>
         </div>
 
+        {seeOrders && (data.paymentDues?.days || []).length > 0 && (
+          <div className="rounded-2xl border border-amber-200 bg-amber-50 p-5 shadow-sm">
+            <div className="flex flex-wrap items-end justify-between gap-3">
+              <div>
+                <p className="text-xs font-semibold uppercase tracking-wide text-amber-800">Payments due</p>
+                <p className="mt-1 text-2xl font-semibold text-slate-900">{money.format(data.paymentDues.todayAmount || 0)} today</p>
+                {data.paymentDues.overdueAmount > 0 && (
+                  <p className="text-sm font-medium text-amber-800">{money.format(data.paymentDues.overdueAmount)} is overdue</p>
+                )}
+              </div>
+            </div>
+            <div className="mt-4 flex gap-2 overflow-x-auto pb-1">
+              {data.paymentDues.days.map((day) => {
+                const state = day.date === data.paymentDues.today ? "today" : day.date < data.paymentDues.today ? "overdue" : "upcoming";
+                return (
+                  <div key={day.date} className={`min-w-36 rounded-xl border bg-white px-3 py-2 ${state === "today" ? "border-indigo-300" : state === "overdue" ? "border-amber-300" : "border-slate-200"}`}>
+                    <p className="text-xs text-slate-500">{dayLabel(day.date)}{state === "today" ? " · Today" : state === "overdue" ? " · Overdue" : ""}</p>
+                    <p className="mt-1 text-sm font-semibold text-slate-900">{money.format(day.amount || 0)}</p>
+                    <p className="text-xs text-slate-500">{day.count} {day.count === 1 ? "payment" : "payments"}</p>
+                  </div>
+                );
+              })}
+            </div>
+          </div>
+        )}
+
         <div className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
           {cards.map((card) => (
             <button
@@ -210,7 +237,7 @@ export function Dashboard() {
               </Panel>
             )}
             {seeClaims && (
-              <Panel title="Returns and claims" subtitle="Quantity only. This does not change the bill or godown stock" action={<button type="button" onClick={() => navigate("/dashboard/orders/reimbursements")} className="text-sm font-medium text-indigo-700">Report</button>}>
+              <Panel title="Returns and claims" subtitle="Returned goods stay out of sellable stock. Replacements come out of main stock" action={<button type="button" onClick={() => navigate("/dashboard/inventory/expiry")} className="text-sm font-medium text-indigo-700">Expiry stock</button>}>
                 <div className="grid grid-cols-2 gap-3">
                   {[
                     ["Return", data.claims?.RETURN, "bg-sky-50 text-sky-800"],

@@ -3,6 +3,7 @@ const Batch = require("../models/Batch");
 const StockMovement = require("../models/StockMovement");
 const Product = require("../models/Product");
 const Order = require("../models/Order");
+const HeldStock = require("../models/HeldStock");
 
 const dayStamp = (date) => new Date(`${date}T12:00:00+05:30`);
 
@@ -297,6 +298,106 @@ const shipOrder = async (order, userId) => {
     await syncProductStock(productIds);
 };
 
+const CLAIM_TYPES = ["DAMAGE", "EXPIRY", "RETURN", "OTHER"];
+
+const settleClaims = async (order, userId) => {
+    const lines = (order.expiryLines || []).filter((line) => !line.stockSettled && CLAIM_TYPES.includes(line.type));
+    if (!lines.length) return;
+    const productIds = [...new Set(lines.flatMap((line) => [String(line.givenProduct || line.product), String(line.product)]))];
+    for (const productId of productIds) {
+        await absorbLegacyStock(productId, userId);
+    }
+    const batches = await Batch.find({ product: { $in: productIds } }).sort({ expiryDate: 1, _id: 1 });
+    const byProduct = new Map();
+    batches.forEach((batch) => {
+        const key = String(batch.product);
+        if (!byProduct.has(key)) byProduct.set(key, []);
+        byProduct.get(key).push(batch);
+    });
+
+    const movements = [];
+    try {
+        for (const line of lines) {
+            const giveProduct = line.givenProduct || line.product;
+            const rawGive = Number(line.givenQuantity);
+            let remaining = line.givenProduct != null && Number.isInteger(rawGive) && rawGive >= 0
+                ? rawGive
+                : (Number(line.quantity) || 0);
+            let given = 0;
+            for (const batch of byProduct.get(String(giveProduct)) || []) {
+                if (remaining <= 0) break;
+                const free = batch.onHand - batch.reserved;
+                if (free <= 0) continue;
+                const take = Math.min(free, remaining);
+                const updated = await Batch.updateOne(
+                    { _id: batch._id, $expr: { $gte: [{ $subtract: ["$onHand", "$reserved"] }, take] } },
+                    { $inc: { onHand: -take } }
+                );
+                if (!updated.modifiedCount) continue;
+                batch.onHand -= take;
+                remaining -= take;
+                given += take;
+                movements.push({
+                    product: giveProduct,
+                    batch: batch._id,
+                    type: line.type,
+                    kind: "REPLACEMENT",
+                    quantity: take,
+                    order: order._id,
+                    note: `Given ${line.givenName || ""} against ${String(line.type).toLowerCase()}`.trim(),
+                    at: new Date(),
+                    createdBy: userId,
+                });
+            }
+            line.stockGiven = given;
+            line.stockShort = remaining;
+            line.stockSettled = true;
+        }
+        if (movements.length) await StockMovement.insertMany(movements);
+        for (const line of lines) {
+            await HeldStock.updateOne(
+                { product: line.product, type: line.type },
+                { $inc: { quantity: Number(line.quantity) || 0 } },
+                { upsert: true }
+            );
+        }
+        await order.save();
+        await syncProductStock(productIds);
+    } catch (error) {
+        if (movements.length) {
+            await Batch.bulkWrite(movements.map((item) => ({
+                updateOne: { filter: { _id: item.batch }, update: { $inc: { onHand: item.quantity } } },
+            })));
+            await StockMovement.deleteMany({ order: order._id, kind: "REPLACEMENT" });
+        }
+        lines.forEach((line) => {
+            line.stockGiven = 0;
+            line.stockShort = 0;
+            line.stockSettled = false;
+        });
+        throw error;
+    }
+};
+
+const reverseClaims = async (order) => {
+    const lines = (order.expiryLines || []).filter((line) => line.stockSettled);
+    if (!lines.length) return;
+    const movements = await StockMovement.find({ order: order._id, kind: "REPLACEMENT" });
+    if (movements.length) {
+        await Batch.bulkWrite(movements.map((item) => ({
+            updateOne: { filter: { _id: item.batch }, update: { $inc: { onHand: item.quantity } } },
+        })));
+        await StockMovement.deleteMany({ _id: { $in: movements.map((item) => item._id) } });
+    }
+    for (const line of lines) {
+        const held = await HeldStock.findOne({ product: line.product, type: line.type });
+        if (!held) continue;
+        held.quantity = Math.max(0, held.quantity - (Number(line.quantity) || 0));
+        await held.save();
+    }
+    await syncProductStock(lines.map((line) => line.product));
+};
+
 const restoreShipped = async (order, userId) => {
     const shipped = order.lines.filter((line) => line.shipped && line.allocations?.length);
     if (!shipped.length) return;
@@ -470,4 +571,4 @@ const deleteEntry = async (movementId) => {
     await syncProductStock([movement.product]);
 };
 
-module.exports = { releaseLines, allocate, shipOrder, restoreShipped, recordEntry, updateEntry, deleteEntry, dayStamp };
+module.exports = { releaseLines, allocate, shipOrder, restoreShipped, settleClaims, reverseClaims, recordEntry, updateEntry, deleteEntry, dayStamp };

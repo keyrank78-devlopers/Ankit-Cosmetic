@@ -1,7 +1,7 @@
-const crypto = require("crypto");
 const mongoose = require("mongoose");
-const Razorpay = require("razorpay");
 const Order = require("../models/Order");
+const Setting = require("../models/Setting");
+const HeldStock = require("../models/HeldStock");
 const Product = require("../models/Product");
 const Scheme = require("../models/Scheme");
 const Gift = require("../models/Gift");
@@ -12,7 +12,8 @@ const Department = require("../models/Department");
 const Designation = require("../models/Designation");
 const User = require("../models/User");
 const { downlineIds } = require("../utils/reporting");
-const { releaseLines, allocate, shipOrder, restoreShipped } = require("../utils/stock");
+const { releaseLines, allocate, shipOrder, restoreShipped, settleClaims, reverseClaims } = require("../utils/stock");
+const { destroyCloudinaryFile } = require("../config/cloudinary");
 const { nextOrderCode } = require("../utils/customerCode");
 const { sanitizeRichText, plainRichText } = require("../utils/richText");
 const { targetSnapshot } = require("./target.controller");
@@ -29,26 +30,26 @@ const NEXT_STATUS = {
 };
 const REIMBURSE_TYPES = ["DAMAGE", "EXPIRY", "RETURN", "OTHER"];
 
-const razorpayClient = () => {
-    if (!process.env.RAZORPAY_KEY_ID || !process.env.RAZORPAY_KEY_SECRET) return null;
-    return new Razorpay({
-        key_id: process.env.RAZORPAY_KEY_ID,
-        key_secret: process.env.RAZORPAY_KEY_SECRET,
-    });
-};
-
-const verifyRazorpaySignature = (orderId, paymentId, signature) => {
-    const expected = crypto
-        .createHmac("sha256", process.env.RAZORPAY_KEY_SECRET)
-        .update(`${orderId}|${paymentId}`)
-        .digest("hex");
-    const left = Buffer.from(expected);
-    const right = Buffer.from(String(signature || ""));
-    if (left.length !== right.length) return false;
-    return crypto.timingSafeEqual(left, right);
-};
-
 const round2 = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
+
+const BELOW_MIN_REMARK = "Entered price is less than the minimum selling amount";
+const OVER_STOCK_REMARK = "Quantity is more than available stock. It will be manufactured.";
+
+const offerPrice = (value) => {
+    if (value === undefined || value === null || String(value).trim() === "") return { missing: true };
+    const text = String(value).trim();
+    if (!/^\d+(\.\d{1,2})?$/.test(text)) return { error: "Enter an offer price with up to 2 decimal places" };
+    return { price: round2(text) };
+};
+
+const lineRemark = (sellPrice, minSalesPrice, overQty) => {
+    const notes = [];
+    if (minSalesPrice != null && Number.isFinite(Number(minSalesPrice)) && sellPrice < Number(minSalesPrice)) {
+        notes.push(BELOW_MIN_REMARK);
+    }
+    if (overQty > 0) notes.push(OVER_STOCK_REMARK);
+    return notes.join(" ");
+};
 
 const moneyFor = (lines) => {
     let subtotal = 0;
@@ -73,13 +74,6 @@ const clearSplit = (order) => {
     order.advanceAmount = 0;
     order.pendingAmount = 0;
     order.set("advanceMode", undefined);
-};
-
-const advanceError = (advance, total, online) => {
-    if (!Number.isFinite(advance) || advance <= 0) return "Enter an advance amount greater than zero";
-    if (advance >= total) return "Advance must be less than the order total. Use Cash or Pay online for the full amount";
-    if (online && Math.round(advance * 100) < 100) return "Online advance needs at least ₹1";
-    return "";
 };
 
 const present = (order) => {
@@ -128,9 +122,9 @@ const catalog = async (req, res, next) => {
             filter.$or = [{ name: rx }, { productCode: rx }, { productId: rx }];
         }
         const products = await Product.find(filter)
-            .select("name mainImage sellPrice gstPercent stock productCode")
+            .select("name mainImage mrp sellPrice minSalesPrice gstPercent stock productCode")
             .sort({ name: 1 })
-            .limit(30)
+            .limit(200)
             .lean();
         res.status(200).json({ success: true, data: products });
     } catch (error) {
@@ -164,18 +158,23 @@ const setLine = async (req, res, next) => {
         const { order } = loaded;
 
         const quantity = Number(req.body.quantity);
-        const remark = String(req.body.remark || "").trim();
         if (!mongoose.Types.ObjectId.isValid(req.body.productId) || !Number.isInteger(quantity) || quantity < 1) {
             return res.status(400).json({ success: false, message: "Enter a whole quantity of at least 1" });
         }
 
-        const product = await Product.findById(req.body.productId).select("name mainImage sellPrice gstPercent stock status");
+        const product = await Product.findById(req.body.productId).select("name mainImage mrp sellPrice minSalesPrice gstPercent stock status");
         if (!product || product.status === "INACTIVE") {
             return res.status(404).json({ success: false, message: "Product not found" });
         }
 
         const index = order.lines.findIndex((line) => String(line.product) === String(product._id));
         const previous = index >= 0 ? order.lines[index] : null;
+        const priced = offerPrice(req.body.sellPrice);
+        if (priced.error) return res.status(400).json({ success: false, message: priced.error });
+        const sellPrice = priced.missing ? previous?.sellPrice : priced.price;
+        if (sellPrice == null) {
+            return res.status(400).json({ success: false, message: "Enter the offer price" });
+        }
         let reserved;
         try {
             reserved = await allocate(product._id, quantity, previous);
@@ -188,14 +187,16 @@ const setLine = async (req, res, next) => {
             product: product._id,
             name: product.name,
             image: product.mainImage || "",
-            sellPrice: product.sellPrice,
+            sellPrice,
+            mrp: product.mrp,
+            ...(product.minSalesPrice != null ? { minSalesPrice: product.minSalesPrice } : {}),
             gstPercent: product.gstPercent || 0,
             quantity,
             lockedQty,
             overQty,
             allocations,
             shipped: false,
-            remark: overQty > 0 ? (remark || "Quantity is more than available stock. It will be manufactured.") : "",
+            remark: lineRemark(sellPrice, product.minSalesPrice, overQty),
         };
         if (index >= 0) order.lines.splice(index, 1, line);
         else order.lines.push(line);
@@ -238,8 +239,8 @@ const schemeOptions = async (req, res, next) => {
             Order.countDocuments({ customer: order.customer, status: { $in: PLACED_STATUSES } }),
             Scheme.find({ type: { $in: Scheme.SCHEME_TYPES } })
                 .select("name type slabs gifts")
-                .populate("slabs.gifts", "name image")
-                .populate("gifts", "name image")
+                .populate("slabs.gifts", "name image price")
+                .populate("gifts", "name image price")
                 .lean(),
         ]);
 
@@ -300,8 +301,8 @@ const setScheme = async (req, res, next) => {
         const [scheme, placedCount] = await Promise.all([
             Scheme.findById(req.body.schemeId)
                 .select("name type slabs gifts")
-                .populate("slabs.gifts", "name image")
-                .populate("gifts", "name image"),
+                .populate("slabs.gifts", "name image price")
+                .populate("gifts", "name image price"),
             Order.countDocuments({ customer: order.customer, status: { $in: PLACED_STATUSES } }),
         ]);
         if (!scheme || !Scheme.SCHEME_TYPES.includes(scheme.type)) {
@@ -313,7 +314,7 @@ const setScheme = async (req, res, next) => {
 
         const snaps = new Map();
         const remember = (gift) => {
-            if (gift?._id) snaps.set(String(gift._id), { name: gift.name, image: gift.image || "" });
+            if (gift?._id) snaps.set(String(gift._id), { name: gift.name, image: gift.image || "", price: Number(gift.price) || 0 });
         };
         (scheme.gifts || []).forEach(remember);
         (scheme.slabs || []).forEach((slab) => (slab.gifts || []).forEach(remember));
@@ -333,12 +334,12 @@ const setScheme = async (req, res, next) => {
             if (!mongoose.Types.ObjectId.isValid(req.body.giftId)) {
                 return res.status(400).json({ success: false, message: "Select a gift for the open scheme" });
             }
-            const gift = await Gift.findById(req.body.giftId).select("name image");
+            const gift = await Gift.findById(req.body.giftId).select("name image price");
             if (!gift) return res.status(404).json({ success: false, message: "Gift not found" });
             order.schemeGift = gift._id;
             order.schemeGiftName = gift.name;
             order.schemeGiftImage = gift.image || "";
-            order.schemeGifts = [{ name: gift.name, image: gift.image || "" }];
+            order.schemeGifts = [{ name: gift.name, image: gift.image || "", price: Number(gift.price) || 0 }];
             order.schemeNote = String(req.body.note || "").trim();
             order.schemeCommitmentAmount = Number(req.body.amount) || null;
             order.schemeCommitmentMonths = Number(req.body.months) || null;
@@ -368,6 +369,7 @@ const setExpiry = async (req, res, next) => {
 
         const byProduct = new Map(order.lines.map((line) => [String(line.product), line]));
         const expiryLines = [];
+        const seen = new Set();
         for (const item of incoming) {
             const line = byProduct.get(String(item.productId));
             const quantity = Number(item.quantity);
@@ -383,12 +385,57 @@ const setExpiry = async (req, res, next) => {
             if (type === "OTHER" && !otherLabel) {
                 return res.status(400).json({ success: false, message: "Write what the other reimbursement is" });
             }
+            const key = `${line.product}:${type}`;
+            if (seen.has(key)) {
+                return res.status(400).json({ success: false, message: "Each product can have one damage, return, expiry, and other line" });
+            }
+            seen.add(key);
+            let mrp;
+            if (type === "EXPIRY" || type === "DAMAGE") {
+                mrp = line.mrp == null || line.mrp === "" ? NaN : Number(line.mrp);
+                if (!Number.isFinite(mrp)) {
+                    const product = await Product.findById(line.product).select("mrp");
+                    mrp = Number(product?.mrp);
+                }
+                if (Number.isFinite(mrp) && mrp >= 0) mrp = round2(mrp);
+                else mrp = undefined;
+            }
+            const givenId = String(item.givenProductId || line.product);
+            const givenQuantity = Number(item.givenQuantity);
+            const giveQty = Number.isInteger(givenQuantity) && givenQuantity >= 0 ? givenQuantity : quantity;
+            const given = await Product.findById(givenId).select("name mainImage mrp");
+            if (!given) {
+                return res.status(400).json({ success: false, message: "Choose the product to give" });
+            }
+            const givenMrp = Number(given.mrp);
+            if (!Number.isFinite(givenMrp) || givenMrp < 0) {
+                return res.status(400).json({ success: false, message: `${given.name} has no MRP` });
+            }
+            if (type === "EXPIRY") {
+                if (mrp == null) {
+                    return res.status(400).json({ success: false, message: `${line.name} has no MRP for the expiry line` });
+                }
+                const expiryValue = round2(quantity * mrp);
+                const giveValue = round2(giveQty * givenMrp);
+                if (giveValue > expiryValue) {
+                    return res.status(400).json({
+                        success: false,
+                        message: `Give amount ${giveValue} is more than the expiry amount ${expiryValue} for ${line.name}`,
+                    });
+                }
+            }
             expiryLines.push({
                 product: line.product,
                 name: line.name,
                 image: line.image,
                 quantity,
                 type,
+                ...(mrp != null ? { mrp } : {}),
+                givenProduct: given._id,
+                givenName: given.name,
+                givenImage: given.mainImage || "",
+                givenQuantity: giveQty,
+                givenMrp: round2(givenMrp),
                 otherLabel: type === "OTHER" ? otherLabel : "",
                 note,
                 purchasedDate: "",
@@ -407,6 +454,39 @@ const setExpiry = async (req, res, next) => {
     }
 };
 
+const parsePromises = (raw, total) => {
+    const rows = Array.isArray(raw) ? raw : [];
+    if (rows.length > 20) return { error: "Add up to 20 payment dates" };
+    const promises = [];
+    for (const row of rows) {
+        const text = String(row?.amount ?? "").trim();
+        if (!/^\d+(\.\d{1,2})?$/.test(text)) return { error: "Enter each payment amount with up to 2 decimal places" };
+        const amount = round2(text);
+        const dueDate = String(row?.dueDate || "").trim();
+        if (!(amount > 0)) return { error: "Enter a payment amount greater than zero" };
+        if (!/^\d{4}-\d{2}-\d{2}$/.test(dueDate)) return { error: "Choose a payment date" };
+        promises.push({ amount, dueDate, status: "DUE" });
+    }
+    const sum = round2(promises.reduce((totalAmount, row) => totalAmount + row.amount, 0));
+    if (sum - total > 0.001) return { error: "Payment dates cannot add up to more than the order total" };
+    return { promises, sum };
+};
+
+const refreshPending = (order) => {
+    const total = round2(moneyFor(order.lines).total || order.total || 0);
+    const received = round2((order.paymentPromises || [])
+        .filter((row) => row.status === "RECEIVED")
+        .reduce((sum, row) => sum + Number(row.amount || 0), 0));
+    const collectedEarlier = order.paymentMethod === "CASH" || (order.paymentMethod === "ONLINE" && order.razorpayPaymentId)
+        ? total
+        : order.paymentMethod === "ADVANCE_COD"
+            ? round2(order.advanceAmount || 0)
+            : 0;
+    order.pendingAmount = round2(Math.max(total - collectedEarlier - received, 0));
+    if (order.pendingAmount === 0 && !order.paidAt) order.paidAt = new Date();
+    if (order.pendingAmount > 0 && !collectedEarlier) order.set("paidAt", undefined);
+};
+
 const placeOrder = async (req, res, next) => {
     try {
         const loaded = await loadDraft(req.params.id, req.user._id);
@@ -414,36 +494,21 @@ const placeOrder = async (req, res, next) => {
         const { order } = loaded;
 
         const method = String(req.body.paymentMethod || "").trim();
-        if (!["COD", "CASH", "ADVANCE_COD"].includes(method)) {
-            return res.status(400).json({ success: false, message: "Choose cash, cash on delivery, or an advance" });
+        if (!["COD", "ONLINE"].includes(method)) {
+            return res.status(400).json({ success: false, message: "Choose cash on delivery or online" });
         }
         if (!order.lines.length) {
             return res.status(400).json({ success: false, message: "Add at least one product" });
         }
 
         const totals = moneyFor(order.lines);
-        if (method === "ADVANCE_COD") {
-            if (String(req.body.advanceMode || "").trim() !== "CASH") {
-                return res.status(400).json({ success: false, message: "Pay this advance online, or collect it in cash" });
-            }
-            const advance = round2(req.body.advanceAmount);
-            const problem = advanceError(advance, totals.total, false);
-            if (problem) return res.status(400).json({ success: false, message: problem });
-            order.paymentMethod = "ADVANCE_COD";
-            order.advanceAmount = advance;
-            order.advanceMode = "CASH";
-            order.pendingAmount = round2(totals.total - advance);
-            order.paidAt = new Date();
-        } else if (method === "CASH") {
-            clearSplit(order);
-            order.paymentMethod = "CASH";
-            order.paidAt = new Date();
-        } else {
-            clearSplit(order);
-            order.paymentMethod = "COD";
-            order.pendingAmount = totals.total;
-            order.set("paidAt", undefined);
-        }
+        const parsed = parsePromises(req.body.promises, totals.total);
+        if (parsed.error) return res.status(400).json({ success: false, message: parsed.error });
+        clearSplit(order);
+        order.paymentMethod = method;
+        order.paymentPromises = parsed.promises;
+        order.pendingAmount = totals.total;
+        order.set("paidAt", undefined);
         order.razorpayOrderId = "";
         order.razorpayPaymentId = "";
         order.razorpaySignature = "";
@@ -455,6 +520,7 @@ const placeOrder = async (req, res, next) => {
         order.placedAt = new Date();
         if (!order.orderCode) order.orderCode = await nextOrderCode(order.placedAt);
         await order.save();
+        await settleClaims(order, req.user._id);
         await Customer.updateOne(
             { _id: order.customer, leadStage: { $ne: "CONVERTED" } },
             { $set: { leadStage: "CONVERTED", convertedAt: order.placedAt, convertedOrder: order._id }, $unset: { nextFollowUpAt: "", nextPurpose: "", lostReason: "" } }
@@ -631,6 +697,18 @@ const listOrders = async (req, res, next) => {
                                 firmName: "$customerDoc.firmName",
                                 customerCode: "$customerDoc.customerCode",
                                 customerId: "$customer",
+                                paymentPromises: {
+                                    $map: {
+                                        input: { $ifNull: ["$paymentPromises", []] },
+                                        as: "promise",
+                                        in: {
+                                            _id: "$$promise._id",
+                                            amount: "$$promise.amount",
+                                            dueDate: "$$promise.dueDate",
+                                            status: "$$promise.status",
+                                        },
+                                    },
+                                },
                                 lines: {
                                     $map: {
                                         input: "$lines",
@@ -639,6 +717,10 @@ const listOrders = async (req, res, next) => {
                                             name: "$$line.name",
                                             image: "$$line.image",
                                             quantity: "$$line.quantity",
+                                            sellPrice: "$$line.sellPrice",
+                                            mrp: "$$line.mrp",
+                                            gstPercent: "$$line.gstPercent",
+                                            remark: "$$line.remark",
                                         },
                                     },
                                 },
@@ -648,8 +730,10 @@ const listOrders = async (req, res, next) => {
                                         as: "item",
                                         in: {
                                             name: "$$item.name",
+                                            image: "$$item.image",
                                             quantity: "$$item.quantity",
                                             type: { $ifNull: ["$$item.type", "EXPIRY"] },
+                                            mrp: "$$item.mrp",
                                             otherLabel: { $ifNull: ["$$item.otherLabel", ""] },
                                             note: { $ifNull: ["$$item.note", ""] },
                                         },
@@ -694,6 +778,7 @@ const deleteOrder = async (req, res, next) => {
         }
         if (order.status === "OUT_FOR_DELIVERY" || order.status === "DELIVERED") await restoreShipped(order, req.user._id);
         else await releaseLockedStock(order.lines);
+        if (order.status !== "DRAFT") await reverseClaims(order);
         await order.deleteOne();
         res.status(200).json({ success: true, message: order.status === "DRAFT" ? "Draft order cancelled" : "Order deleted" });
     } catch (error) {
@@ -744,6 +829,7 @@ const getOrder = async (req, res, next) => {
                     schemeNote: 1,
                     expiryEnabled: 1,
                     expiryLines: 1,
+                    paymentPromises: 1,
                     lines: 1,
                     customerId: "$customer",
                     customerName: "$customerDoc.retailerName",
@@ -1051,139 +1137,115 @@ const revenue = async (req, res, next) => {
     }
 };
 
-const createOnlinePayment = async (req, res, next) => {
+const getPaymentQr = async (req, res, next) => {
     try {
-        const client = razorpayClient();
-        if (!client) {
-            return res.status(503).json({ success: false, message: "Add RAZORPAY_KEY_ID and RAZORPAY_KEY_SECRET in the server environment" });
-        }
-        const loaded = await loadDraft(req.params.id, req.user._id);
-        if (loaded.error) return res.status(loaded.error.status).json({ success: false, message: loaded.error.message });
-        const { order } = loaded;
-        if (!order.lines.length) {
-            return res.status(400).json({ success: false, message: "Add at least one product" });
-        }
-
-        const totals = moneyFor(order.lines);
-        const advancePay = String(req.body.kind || "").trim() === "ADVANCE";
-        let charge = totals.total;
-        if (advancePay) {
-            const advance = round2(req.body.advanceAmount);
-            const problem = advanceError(advance, totals.total, true);
-            if (problem) return res.status(400).json({ success: false, message: problem });
-            charge = advance;
-        }
-        const paise = Math.round(charge * 100);
-        if (paise < 100) {
-            return res.status(400).json({ success: false, message: "Online payment needs at least ₹1" });
-        }
-        const sameAdvance = advancePay
-            && order.advanceMode === "ONLINE"
-            && round2(order.advanceAmount) === charge;
-        const sameFull = !advancePay && order.advanceMode !== "ONLINE";
-        if (order.razorpayOrderId && order.razorpayAmount === paise && (sameAdvance || sameFull)) {
-            return res.status(200).json({
-                success: true,
-                data: {
-                    keyId: process.env.RAZORPAY_KEY_ID,
-                    razorpayOrderId: order.razorpayOrderId,
-                    amount: paise,
-                    currency: "INR",
-                    total: totals.total,
-                    advanceAmount: advancePay ? charge : 0,
-                    pendingAmount: advancePay ? round2(totals.total - charge) : 0,
-                },
-            });
-        }
-
-        if (advancePay) {
-            order.advanceAmount = charge;
-            order.advanceMode = "ONLINE";
-            order.pendingAmount = round2(totals.total - charge);
-        } else {
-            clearSplit(order);
-        }
-
-        const created = await client.orders.create({
-            amount: paise,
-            currency: "INR",
-            receipt: String(order._id),
-            notes: { crmOrderId: String(order._id), kind: advancePay ? "ADVANCE" : "FULL" },
-        });
-        order.razorpayOrderId = created.id;
-        order.razorpayAmount = paise;
-        order.razorpayPaymentId = "";
-        order.razorpaySignature = "";
-        await order.save();
-        res.status(200).json({
-            success: true,
-            data: {
-                keyId: process.env.RAZORPAY_KEY_ID,
-                razorpayOrderId: created.id,
-                amount: paise,
-                currency: "INR",
-                total: totals.total,
-                advanceAmount: advancePay ? charge : 0,
-                pendingAmount: advancePay ? round2(totals.total - charge) : 0,
-            },
-        });
+        const doc = await Setting.findOne({ key: "paymentQr" }).lean();
+        res.status(200).json({ success: true, data: { image: doc?.image || "" } });
     } catch (error) {
         next(error);
     }
 };
 
-const verifyOnlinePayment = async (req, res, next) => {
+const setPaymentQr = async (req, res, next) => {
     try {
-        if (!razorpayClient()) {
-            return res.status(503).json({ success: false, message: "Online payment is not configured" });
+        if (!req.file?.path) {
+            return res.status(400).json({ success: false, message: "Upload a QR image" });
         }
-        const loaded = await loadDraft(req.params.id, req.user._id);
+        const previous = await Setting.findOne({ key: "paymentQr" });
+        if (previous?.publicId && previous.publicId !== req.file.filename) {
+            await destroyCloudinaryFile(previous.publicId);
+        }
+        const doc = await Setting.findOneAndUpdate(
+            { key: "paymentQr" },
+            { image: req.file.path, publicId: req.file.filename || "" },
+            { upsert: true, new: true }
+        );
+        res.status(200).json({ success: true, message: "QR saved", data: { image: doc.image } });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const loadPlaced = async (id, user) => {
+    if (!mongoose.Types.ObjectId.isValid(id)) return { error: { status: 400, message: "Invalid order id" } };
+    const scope = await orderScope(user);
+    const order = await Order.findOne({ _id: id, status: { $in: PLACED_STATUSES }, ...scope });
+    if (!order) return { error: { status: 404, message: "Order not found" } };
+    return { order };
+};
+
+const promiseRoom = (order, extra = 0, ignoreId = "") => {
+    const total = round2(moneyFor(order.lines).total || order.total || 0);
+    const used = round2((order.paymentPromises || [])
+        .filter((row) => String(row._id) !== String(ignoreId))
+        .reduce((sum, row) => sum + Number(row.amount || 0), 0));
+    return round2(total - used - extra);
+};
+
+const addPaymentPromise = async (req, res, next) => {
+    try {
+        const loaded = await loadPlaced(req.params.id, req.user);
         if (loaded.error) return res.status(loaded.error.status).json({ success: false, message: loaded.error.message });
         const { order } = loaded;
-
-        const razorpayOrderId = String(req.body.razorpay_order_id || "").trim();
-        const razorpayPaymentId = String(req.body.razorpay_payment_id || "").trim();
-        const razorpaySignature = String(req.body.razorpay_signature || "").trim();
-        if (!razorpayOrderId || !razorpayPaymentId || !razorpaySignature) {
-            return res.status(400).json({ success: false, message: "Payment details are incomplete" });
+        const parsed = parsePromises([req.body], round2(moneyFor(order.lines).total || order.total || 0));
+        if (parsed.error) return res.status(400).json({ success: false, message: parsed.error });
+        if (promiseRoom(order, parsed.sum) < -0.001) {
+            return res.status(400).json({ success: false, message: "Payment dates cannot add up to more than the order total" });
         }
-        if (!order.razorpayOrderId || razorpayOrderId !== order.razorpayOrderId) {
-            return res.status(400).json({ success: false, message: "This payment does not belong to the order" });
-        }
-        if (!verifyRazorpaySignature(razorpayOrderId, razorpayPaymentId, razorpaySignature)) {
-            return res.status(400).json({ success: false, message: "Payment signature could not be verified" });
-        }
-
-        const totals = moneyFor(order.lines);
-        const advanceOnline = order.advanceMode === "ONLINE" && round2(order.advanceAmount) > 0;
-        const expected = advanceOnline ? round2(order.advanceAmount) : totals.total;
-        const paise = Math.round(expected * 100);
-        if (paise !== order.razorpayAmount || (advanceOnline && order.advanceAmount >= totals.total)) {
-            return res.status(400).json({ success: false, message: "Order amount changed. Start the payment again" });
-        }
-
-        order.razorpayPaymentId = razorpayPaymentId;
-        order.razorpaySignature = razorpaySignature;
-        order.paidAt = new Date();
-        order.status = "PENDING";
-        if (advanceOnline) {
-            order.paymentMethod = "ADVANCE_COD";
-            order.pendingAmount = round2(totals.total - order.advanceAmount);
-        } else {
-            clearSplit(order);
-            order.paymentMethod = "ONLINE";
-        }
-        order.subtotal = totals.subtotal;
-        order.gstTotal = totals.gstTotal;
-        order.total = totals.total;
-        order.placedAt = new Date();
-        if (!order.orderCode) order.orderCode = await nextOrderCode(order.placedAt);
+        order.paymentPromises.push(parsed.promises[0]);
+        refreshPending(order);
         await order.save();
-        await Customer.updateOne(
-            { _id: order.customer, leadStage: { $ne: "CONVERTED" } },
-            { $set: { leadStage: "CONVERTED", convertedAt: order.placedAt, convertedOrder: order._id }, $unset: { nextFollowUpAt: "", nextPurpose: "", lostReason: "" } }
-        );
-        res.status(200).json({ success: true, message: "Payment verified", data: present(order) });
+        res.status(200).json({ success: true, data: present(order) });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const updatePaymentPromise = async (req, res, next) => {
+    try {
+        const loaded = await loadPlaced(req.params.id, req.user);
+        if (loaded.error) return res.status(loaded.error.status).json({ success: false, message: loaded.error.message });
+        const { order } = loaded;
+        const row = (order.paymentPromises || []).id(req.params.promiseId);
+        if (!row) return res.status(404).json({ success: false, message: "Payment date not found" });
+        if (row.status === "RECEIVED") {
+            return res.status(400).json({ success: false, message: "A received payment cannot be edited" });
+        }
+        const markReceived = String(req.body.status || "").trim() === "RECEIVED";
+        if (markReceived) {
+            row.status = "RECEIVED";
+            row.receivedAt = new Date();
+        } else {
+            const parsed = parsePromises([{ amount: req.body.amount, dueDate: req.body.dueDate }], round2(moneyFor(order.lines).total || order.total || 0));
+            if (parsed.error) return res.status(400).json({ success: false, message: parsed.error });
+            if (promiseRoom(order, parsed.sum, row._id) < -0.001) {
+                return res.status(400).json({ success: false, message: "Payment dates cannot add up to more than the order total" });
+            }
+            row.amount = parsed.promises[0].amount;
+            row.dueDate = parsed.promises[0].dueDate;
+        }
+        refreshPending(order);
+        await order.save();
+        res.status(200).json({ success: true, data: present(order) });
+    } catch (error) {
+        next(error);
+    }
+};
+
+const deletePaymentPromise = async (req, res, next) => {
+    try {
+        const loaded = await loadPlaced(req.params.id, req.user);
+        if (loaded.error) return res.status(loaded.error.status).json({ success: false, message: loaded.error.message });
+        const { order } = loaded;
+        const row = (order.paymentPromises || []).id(req.params.promiseId);
+        if (!row) return res.status(404).json({ success: false, message: "Payment date not found" });
+        if (row.status === "RECEIVED") {
+            return res.status(400).json({ success: false, message: "A received payment cannot be removed" });
+        }
+        order.paymentPromises.pull(row._id);
+        refreshPending(order);
+        await order.save();
+        res.status(200).json({ success: true, data: present(order) });
     } catch (error) {
         next(error);
     }
@@ -1264,7 +1326,7 @@ const getDashboard = async (req, res, next) => {
         const seeSchemes = see("VIEW_SCHEMES", "CREATE_SCHEMES");
 
         const scope = await orderScope(req.user);
-        const [customers, products, activeProducts, categories, subCategories, employees, departments, designations, gifts, schemes, [stats], lowStockAgg, targets, claimRows] = await Promise.all([
+        const [customers, products, activeProducts, categories, subCategories, employees, departments, designations, gifts, schemes, [stats], lowStockAgg, targets, claimRows, paymentDueRows] = await Promise.all([
             seeCustomers ? Customer.countDocuments() : 0,
             seeStock ? Product.countDocuments() : 0,
             seeStock ? Product.countDocuments({ status: "ACTIVE" }) : 0,
@@ -1355,6 +1417,13 @@ const getDashboard = async (req, res, next) => {
                 { $unwind: "$expiryLines" },
                 { $group: { _id: { $ifNull: ["$expiryLines.type", "EXPIRY"] }, quantity: { $sum: "$expiryLines.quantity" }, lines: { $sum: 1 } } },
             ]) : null,
+            seeOrders ? Order.aggregate([
+                { $match: { status: { $in: PLACED_STATUSES }, ...scope } },
+                { $unwind: "$paymentPromises" },
+                { $match: { "paymentPromises.status": "DUE" } },
+                { $group: { _id: "$paymentPromises.dueDate", amount: { $sum: "$paymentPromises.amount" }, count: { $sum: 1 } } },
+                { $sort: { _id: 1 } },
+            ]) : [],
         ]);
 
         const dayMap = new Map((stats?.days || []).map((day) => [day._id, day]));
@@ -1404,6 +1473,13 @@ const getDashboard = async (req, res, next) => {
             if (Object.prototype.hasOwnProperty.call(claims, row._id)) claims[row._id] = row.quantity || 0;
         });
         const low = lowStockAgg?.[0];
+        const dueToday = new Intl.DateTimeFormat("en-CA", { timeZone: "Asia/Kolkata", year: "numeric", month: "2-digit", day: "2-digit" }).format(new Date());
+        const dueDays = (paymentDueRows || []).map((row) => ({
+            date: row._id,
+            amount: round2(row.amount || 0),
+            count: row.count || 0,
+        }));
+        const sumDue = (rows) => round2(rows.reduce((sum, row) => sum + row.amount, 0));
 
         res.status(200).json({
             success: true,
@@ -1437,6 +1513,12 @@ const getDashboard = async (req, res, next) => {
                 statuses: seeOrders ? statuses : [],
                 payments: seeRevenue ? payments : [],
                 recent: seeOrders ? (stats?.recent || []) : [],
+                paymentDues: seeOrders ? {
+                    today: dueToday,
+                    todayAmount: sumDue(dueDays.filter((row) => row.date === dueToday)),
+                    overdueAmount: sumDue(dueDays.filter((row) => row.date < dueToday)),
+                    days: dueDays,
+                } : null,
             },
         });
     } catch (error) {
@@ -1647,6 +1729,126 @@ const getWarehouseReport = async (req, res, next) => {
     }
 };
 
+const getExpiryStock = async (req, res, next) => {
+    try {
+        const page = Math.max(parseInt(req.query.page, 10) || 1, 1);
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 20, 1), 100);
+        const type = String(req.query.type || "EXPIRY").trim().toUpperCase();
+        const search = String(req.query.search || "").trim();
+        const from = String(req.query.from || "").trim();
+        const to = String(req.query.to || "").trim();
+        if (type !== "ALL" && !REIMBURSE_TYPES.includes(type)) {
+            return res.status(400).json({ success: false, message: "Choose expiry, damage, return, other, or all" });
+        }
+        const placedAt = reportRange(from, to);
+        const scope = await orderScope(req.user);
+        const match = { status: { $in: PLACED_STATUSES }, expiryEnabled: true, ...scope };
+        if (placedAt) match.placedAt = placedAt;
+        const pipeline = [
+            { $match: match },
+            { $unwind: "$expiryLines" },
+            { $addFields: { lineType: { $ifNull: ["$expiryLines.type", "EXPIRY"] } } },
+        ];
+        if (type !== "ALL") pipeline.push({ $match: { lineType: type } });
+        if (search) {
+            const rx = { $regex: escapeRegex(search), $options: "i" };
+            const customerIds = await customerSearchIds(search);
+            pipeline.push({
+                $match: {
+                    $or: [
+                        { orderCode: rx },
+                        { "expiryLines.name": rx },
+                        ...(customerIds.length ? [{ customer: { $in: customerIds } }] : []),
+                    ],
+                },
+            });
+        }
+        pipeline.push({
+            $facet: {
+                totals: [{
+                    $group: {
+                        _id: "$lineType",
+                        received: { $sum: "$expiryLines.quantity" },
+                        given: { $sum: { $ifNull: ["$expiryLines.stockGiven", 0] } },
+                        short: { $sum: { $ifNull: ["$expiryLines.stockShort", 0] } },
+                        value: { $sum: { $multiply: ["$expiryLines.quantity", { $ifNull: ["$expiryLines.mrp", 0] }] } },
+                    },
+                }],
+                total: [{ $count: "count" }],
+                rows: [
+                    { $sort: { placedAt: -1, _id: -1 } },
+                    { $skip: (page - 1) * limit },
+                    { $limit: limit },
+                    {
+                        $lookup: {
+                            from: Customer.collection.name,
+                            localField: "customer",
+                            foreignField: "_id",
+                            pipeline: [{ $project: { retailerName: 1, firmName: 1, customerCode: 1 } }],
+                            as: "customerDoc",
+                        },
+                    },
+                    { $unwind: { path: "$customerDoc", preserveNullAndEmptyArrays: true } },
+                    {
+                        $project: {
+                            orderId: "$_id",
+                            orderCode: 1,
+                            placedAt: 1,
+                            customerName: "$customerDoc.retailerName",
+                            firmName: "$customerDoc.firmName",
+                            customerCode: "$customerDoc.customerCode",
+                            productName: "$expiryLines.name",
+                            image: "$expiryLines.image",
+                            quantity: "$expiryLines.quantity",
+                            givenName: "$expiryLines.givenName",
+                            givenImage: "$expiryLines.givenImage",
+                            givenQuantity: "$expiryLines.givenQuantity",
+                            givenMrp: "$expiryLines.givenMrp",
+                            stockGiven: { $ifNull: ["$expiryLines.stockGiven", 0] },
+                            stockShort: { $ifNull: ["$expiryLines.stockShort", 0] },
+                            stockSettled: { $ifNull: ["$expiryLines.stockSettled", false] },
+                            mrp: "$expiryLines.mrp",
+                            type: "$lineType",
+                            otherLabel: { $ifNull: ["$expiryLines.otherLabel", ""] },
+                            note: { $ifNull: ["$expiryLines.note", ""] },
+                        },
+                    },
+                ],
+            },
+        });
+        const [[result], heldRows] = await Promise.all([
+            Order.aggregate(pipeline),
+            HeldStock.aggregate([{ $group: { _id: "$type", quantity: { $sum: "$quantity" } } }]),
+        ]);
+        const totals = { DAMAGE: { received: 0, given: 0, short: 0, value: 0 }, EXPIRY: { received: 0, given: 0, short: 0, value: 0 }, RETURN: { received: 0, given: 0, short: 0, value: 0 }, OTHER: { received: 0, given: 0, short: 0, value: 0 } };
+        (result?.totals || []).forEach((row) => {
+            if (totals[row._id]) {
+                totals[row._id] = {
+                    received: row.received || 0,
+                    given: row.given || 0,
+                    short: row.short || 0,
+                    value: Math.round(((row.value || 0) + Number.EPSILON) * 100) / 100,
+                };
+            }
+        });
+        const held = { DAMAGE: 0, EXPIRY: 0, RETURN: 0, OTHER: 0 };
+        heldRows.forEach((row) => {
+            if (Object.prototype.hasOwnProperty.call(held, row._id)) held[row._id] = row.quantity || 0;
+        });
+        const total = result?.total?.[0]?.count || 0;
+        res.status(200).json({
+            success: true,
+            held,
+            totals,
+            data: result?.rows || [],
+            pagination: { page, limit, total, pages: Math.max(Math.ceil(total / limit), 1) },
+        });
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+        next(error);
+    }
+};
+
 module.exports = {
     catalog,
     startOrder,
@@ -1662,10 +1864,14 @@ module.exports = {
     customerHistory,
     listOrders,
     revenue,
-    createOnlinePayment,
-    verifyOnlinePayment,
+    getPaymentQr,
+    setPaymentQr,
+    addPaymentPromise,
+    updatePaymentPromise,
+    deletePaymentPromise,
     updateOrderStatus,
     getDashboard,
     getReimbursements,
+    getExpiryStock,
     getWarehouseReport,
 };

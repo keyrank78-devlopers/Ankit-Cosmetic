@@ -10,7 +10,6 @@ import schemeService from "../../services/schemeService";
 const TYPES = [
   { value: "SLAB", label: "Amount slab" },
   { value: "OPEN", label: "Open request" },
-  { value: "FIRST_ORDER", label: "First order" },
 ];
 
 const emptySlab = () => ({ minAmount: "", giftIds: [] });
@@ -55,7 +54,6 @@ export function SchemeCreate() {
   const isEdit = Boolean(id);
   const [name, setName] = useState("");
   const [type, setType] = useState("SLAB");
-  const [giftIds, setGiftIds] = useState([]);
   const [slabs, setSlabs] = useState([emptySlab()]);
   const [gifts, setGifts] = useState([]);
   const [loadingGifts, setLoadingGifts] = useState(true);
@@ -85,8 +83,7 @@ export function SchemeCreate() {
         if (cancelled) return;
         const scheme = res.data;
         setName(scheme.name || "");
-        setType(scheme.type || "SLAB");
-        setGiftIds((scheme.gifts || []).map(giftId));
+        setType(scheme.type === "OPEN" ? "OPEN" : "SLAB");
         setSlabs(
           scheme.slabs?.length
             ? scheme.slabs.map((slab) => ({
@@ -144,14 +141,6 @@ export function SchemeCreate() {
       payload.slabs = parsed;
     }
 
-    if (type === "FIRST_ORDER") {
-      if (!giftIds.length) {
-        toast.error("Select at least one gift for the first order");
-        return;
-      }
-      payload.gifts = giftIds;
-    }
-
     try {
       setSaving(true);
       if (isEdit) {
@@ -180,7 +169,7 @@ export function SchemeCreate() {
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">{isEdit ? "Edit scheme" : "Create scheme"}</h1>
           <p className="mt-1 text-sm text-slate-500">
-            Pick gifts that were already created. On a slab, the customer can receive any one of the selected gifts. A first order gets a gift because it is their first order.
+            Pick gifts that were already created. On a slab, the customer can receive any one of the selected gifts.
           </p>
         </div>
       </div>
@@ -253,22 +242,6 @@ export function SchemeCreate() {
           <p className="rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">
             This scheme stays open. The gift is chosen later, when a customer request is entered. Only one open request scheme can be created.
           </p>
-        )}
-
-        {type === "FIRST_ORDER" && (
-          <div className="space-y-4">
-            <p className="rounded-lg bg-slate-50 px-4 py-3 text-sm text-slate-600">
-              This applies to a customer&apos;s first order, for any purchase amount. They can receive any one of the gifts below.
-            </p>
-            <div>
-              <p className="mb-2 text-sm font-medium text-slate-700">Customer can get any one of these *</p>
-              {loadingGifts ? (
-                <p className="text-sm text-slate-500">Loading gifts...</p>
-              ) : (
-                <GiftChoices gifts={gifts} selected={giftIds} onToggle={(id) => setGiftIds((current) => toggleIn(current, id))} />
-              )}
-            </div>
-          </div>
         )}
 
         <div className="flex gap-3">

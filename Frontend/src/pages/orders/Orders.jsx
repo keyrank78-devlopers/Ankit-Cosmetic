@@ -1,6 +1,7 @@
 import { useEffect, useState } from "react";
 import { Link, useNavigate } from "react-router-dom";
 import { Eye, Search, Trash2 } from "lucide-react";
+import { ExportButton } from "../../components/export/ExportButton";
 import toast from "react-hot-toast";
 import { Button } from "../../components/ui/Button";
 import { Input } from "../../components/ui/Input";
@@ -8,7 +9,7 @@ import orderService from "../../services/orderService";
 import { plainRichText } from "../../components/ui/RichText";
 import { StatusBadge, StatusSelect, claimText } from "./orderStatus.jsx";
 import { useAuth } from "../../context/AuthContext";
-import { paymentAmounts, paymentLabel } from "../../utils/payment";
+import { paymentAmounts, paymentDateLabel, paymentLabel } from "../../utils/payment";
 
 const money = new Intl.NumberFormat("en-IN", { style: "currency", currency: "INR", maximumFractionDigits: 2 });
 const when = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
@@ -115,9 +116,12 @@ export function Orders() {
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Orders</h1>
           <p className="text-sm text-slate-500">{total} placed order{total === 1 ? "" : "s"}</p>
         </div>
-        {canPlace && (
-          <Link to="/dashboard/orders/new" className="inline-flex h-9 items-center rounded-md bg-indigo-600 px-4 text-sm font-medium text-white hover:bg-indigo-700">Place order</Link>
-        )}
+        <div className="flex flex-wrap items-center gap-2">
+          <ExportButton type="ORDERS" filters={applied} />
+          {canPlace && (
+            <Link to="/dashboard/orders/new" className="inline-flex h-9 items-center rounded-md bg-indigo-600 px-4 text-sm font-medium text-white hover:bg-indigo-700">Place order</Link>
+          )}
+        </div>
       </div>
 
       <div className="rounded-2xl border border-slate-200 bg-white p-4 shadow-sm">
@@ -223,15 +227,19 @@ export function Orders() {
                   <td className="px-4 py-4 align-top">
                     <ul className="space-y-2">
                       {(order.lines || []).map((line, index) => (
-                        <li key={`${line.name}-${index}`} className="flex items-center gap-2">
-                          {line.image ? <img src={line.image} alt="" className="h-8 w-8 rounded border border-slate-200 object-cover" /> : <span className="h-8 w-8 rounded border border-dashed border-slate-300" />}
-                          <span className="text-sm text-slate-700">{line.name} <span className="text-slate-400">× {line.quantity}</span></span>
+                        <li key={`${line.name}-${index}`} className="flex items-start gap-2">
+                          {line.image ? <img src={line.image} alt="" className="h-10 w-10 shrink-0 rounded border border-slate-200 bg-white object-contain" /> : <span className="h-10 w-10 shrink-0 rounded border border-dashed border-slate-300" />}
+                          <span className="min-w-0">
+                            <span className="block text-sm font-medium text-slate-900">{line.name}</span>
+                            <span className="block text-xs text-slate-500">{line.quantity} × {money.format(line.sellPrice || 0)} = {money.format((line.sellPrice || 0) * (line.quantity || 0))}{line.mrp != null ? ` · MRP ${money.format(line.mrp)}` : ""}</span>
+                            {line.remark ? <span className="block text-xs font-medium text-amber-700">{line.remark}</span> : null}
+                          </span>
                         </li>
                       ))}
                     </ul>
                     {order.expiryEnabled && order.expiryLines?.length > 0 && (
                       <p className="mt-2 text-xs text-amber-700">
-                        Reimbursement: {order.expiryLines.map((item) => `${item.name} × ${item.quantity} · ${claimText(item)}${item.note ? ` (${item.note})` : ""}`).join(", ")}
+                        Reimbursement: {order.expiryLines.map((item) => `${item.name} × ${item.quantity} · ${claimText(item)}${item.type === "EXPIRY" && item.mrp != null ? ` · MRP ₹${item.mrp}` : ""}${item.note ? ` (${item.note})` : ""}`).join(", ")}
                       </p>
                     )}
                   </td>
@@ -244,12 +252,21 @@ export function Orders() {
                     <p className="text-sm font-medium text-slate-900">{paymentLabel(order)}</p>
                     {order.paymentMethod === "ADVANCE_COD" ? (
                       <p className="mt-1 text-xs text-slate-500">Advance {money.format(paymentAmounts(order).advance)} · Pending {money.format(paymentAmounts(order).pending)}</p>
-                    ) : order.paymentMethod === "COD" ? (
+                    ) : order.paymentMethod === "COD" || (order.paymentMethod === "ONLINE" && !order.razorpayPaymentId) ? (
                       <p className="mt-1 text-xs text-slate-500">Pending {money.format(paymentAmounts(order).pending)}</p>
                     ) : null}
                     <p className="mt-1 text-xs text-slate-500">Order id</p>
                     <p className="break-all text-sm font-medium text-slate-900">{order.orderCode || "—"}</p>
-                    {(order.paymentMethod === "ONLINE" || order.advanceMode === "ONLINE") ? (
+                    {(order.paymentPromises || []).length > 0 && (
+                      <ul className="mt-2 space-y-1">
+                        {order.paymentPromises.map((row) => (
+                          <li key={row._id || `${row.dueDate}-${row.amount}`} className="text-xs text-slate-600">
+                            {paymentDateLabel(row.dueDate)} · {money.format(row.amount || 0)} · {row.status === "RECEIVED" ? "Received" : "Due"}
+                          </li>
+                        ))}
+                      </ul>
+                    )}
+                    {(order.razorpayOrderId || order.razorpayPaymentId) ? (
                       <div className="mt-2 space-y-1">
                         <p className="text-xs text-slate-500">Razorpay order id</p>
                         <p className="break-all text-sm font-medium text-slate-900">{order.razorpayOrderId || "—"}</p>
