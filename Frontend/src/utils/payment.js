@@ -11,6 +11,7 @@ const receivedPromises = (order) => roundMoney((order?.paymentPromises || [])
   .reduce((sum, row) => sum + Number(row.amount || 0), 0));
 
 export const paymentLabel = (order) => {
+  if (order?.paymentMethod === "COD_ONLINE") return "COD + Online";
   if (order?.paymentMethod === "ONLINE") return "Online";
   if (order?.paymentMethod === "CASH") return "Cash";
   if (order?.paymentMethod === "ADVANCE_COD") {
@@ -22,6 +23,13 @@ export const paymentLabel = (order) => {
 export const paymentAmounts = (order) => {
   const total = roundMoney(order?.total || 0);
   const advance = roundMoney(order?.advanceAmount || 0);
+  if (order?.paymentMethod === "COD_ONLINE") {
+    const received = receivedPromises(order);
+    const pending = order.pendingAmount == null
+      ? roundMoney(Math.max(total - advance - received, 0))
+      : roundMoney(order.pendingAmount);
+    return { total, advance, pending };
+  }
   if (order?.paymentMethod === "ADVANCE_COD") {
     const pending = order.pendingAmount == null
       ? roundMoney(Math.max(total - advance, 0))

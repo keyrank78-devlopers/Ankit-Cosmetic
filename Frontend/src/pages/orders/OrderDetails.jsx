@@ -201,6 +201,18 @@ export function OrderDetails() {
       <div className="rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
         <p className="text-xs font-medium uppercase tracking-wide text-slate-400">Payment</p>
         <p className="mt-1 text-sm font-medium text-slate-900">{paymentLabel(order)}</p>
+        {order.paymentMethod === "COD_ONLINE" && (
+          <div className="mt-3 grid gap-3 sm:grid-cols-2">
+            <div className="rounded-lg bg-indigo-50 px-3 py-2">
+              <p className="text-xs text-indigo-700">Online</p>
+              <p className="text-sm font-semibold text-slate-900">{money.format(paymentAmounts(order).advance)}</p>
+            </div>
+            <div className="rounded-lg bg-slate-50 px-3 py-2">
+              <p className="text-xs text-slate-500">COD</p>
+              <p className="text-sm font-semibold text-slate-900">{money.format(Math.max((order.total || 0) - paymentAmounts(order).advance, 0))}</p>
+            </div>
+          </div>
+        )}
         <div className="mt-4 grid gap-4 sm:grid-cols-2">
           <div>
             <p className="text-xs text-slate-500">Order total</p>
@@ -309,7 +321,7 @@ export function OrderDetails() {
             {order.expiryLines.map((item, index) => {
               const source = (order.lines || []).find((line) => String(line.product) === String(item.product));
               const unit = item.mrp != null ? Number(item.mrp) : source?.mrp != null ? Number(source.mrp) : null;
-              const showPrice = (item.type === "EXPIRY" || item.type === "DAMAGE") && unit != null;
+              const showPrice = (item.type === "EXPIRY" || item.type === "DAMAGE" || item.type === "MISSING") && unit != null;
               return (
                 <div key={`${item.product || item.name}-${item.type}-${index}`} className="rounded-xl border border-slate-200 p-3">
                   <p className="text-xs font-medium text-slate-500">Reimbursement · {claimText(item)}</p>

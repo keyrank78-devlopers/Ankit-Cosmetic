@@ -1,8 +1,8 @@
 import api from "./api";
 
 const orderService = {
-  catalog: async (search) => {
-    const response = await api.get("/admin/orders/catalog", { params: { search } });
+  catalog: async (search, limit) => {
+    const response = await api.get("/admin/orders/catalog", { params: { search, limit } });
     return response.data;
   },
   start: async (customerId) => {

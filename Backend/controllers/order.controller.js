@@ -19,7 +19,7 @@ const { sanitizeRichText, plainRichText } = require("../utils/richText");
 const { targetSnapshot } = require("./target.controller");
 
 const PLACED_STATUSES = ["PLACED", "PENDING_CONFIRM", "PENDING", "CONFIRM", "READY_TO_DELIVERY", "OUT_FOR_DELIVERY", "DELIVERED"];
-const PAYMENT_METHODS = ["COD", "ONLINE", "CASH", "ADVANCE_COD"];
+const PAYMENT_METHODS = ["COD", "ONLINE", "CASH", "ADVANCE_COD", "COD_ONLINE"];
 const NEXT_STATUS = {
     PLACED: "CONFIRM",
     PENDING_CONFIRM: "CONFIRM",
@@ -28,7 +28,7 @@ const NEXT_STATUS = {
     READY_TO_DELIVERY: "OUT_FOR_DELIVERY",
     OUT_FOR_DELIVERY: "DELIVERED",
 };
-const REIMBURSE_TYPES = ["DAMAGE", "EXPIRY", "RETURN", "OTHER"];
+const REIMBURSE_TYPES = ["DAMAGE", "EXPIRY", "RETURN", "MISSING", "OTHER"];
 
 const round2 = (value) => Math.round((Number(value) + Number.EPSILON) * 100) / 100;
 
@@ -121,10 +121,11 @@ const catalog = async (req, res, next) => {
             const rx = { $regex: escapeRegex(search), $options: "i" };
             filter.$or = [{ name: rx }, { productCode: rx }, { productId: rx }];
         }
+        const limit = Math.min(Math.max(parseInt(req.query.limit, 10) || 200, 1), 2000);
         const products = await Product.find(filter)
             .select("name mainImage mrp sellPrice minSalesPrice gstPercent stock productCode")
             .sort({ name: 1 })
-            .limit(200)
+            .limit(limit)
             .lean();
         res.status(200).json({ success: true, data: products });
     } catch (error) {
@@ -371,16 +372,22 @@ const setExpiry = async (req, res, next) => {
         const expiryLines = [];
         const seen = new Set();
         for (const item of incoming) {
-            const line = byProduct.get(String(item.productId));
             const quantity = Number(item.quantity);
             const type = String(item.type || "").trim().toUpperCase();
             const otherLabel = String(item.otherLabel || "").trim().slice(0, 80);
             const note = String(item.note || "").trim().slice(0, 200);
+            if (!REIMBURSE_TYPES.includes(type)) {
+                return res.status(400).json({ success: false, message: "Choose damage, expiry, return, or missing" });
+            }
+            let line = byProduct.get(String(item.productId));
+            if (!line && mongoose.Types.ObjectId.isValid(item.productId)) {
+                const product = await Product.findOne({ _id: item.productId, status: "ACTIVE" }).select("name mainImage mrp");
+                if (product) {
+                    line = { product: product._id, name: product.name, image: product.mainImage || "", mrp: product.mrp };
+                }
+            }
             if (!line || !Number.isInteger(quantity) || quantity < 1) {
                 return res.status(400).json({ success: false, message: "Enter a whole quantity of at least 1" });
-            }
-            if (!REIMBURSE_TYPES.includes(type)) {
-                return res.status(400).json({ success: false, message: "Choose damage, expiry, return, or other" });
             }
             if (type === "OTHER" && !otherLabel) {
                 return res.status(400).json({ success: false, message: "Write what the other reimbursement is" });
@@ -391,7 +398,7 @@ const setExpiry = async (req, res, next) => {
             }
             seen.add(key);
             let mrp;
-            if (type === "EXPIRY" || type === "DAMAGE") {
+            if (type === "EXPIRY" || type === "DAMAGE" || type === "MISSING") {
                 mrp = line.mrp == null || line.mrp === "" ? NaN : Number(line.mrp);
                 if (!Number.isFinite(mrp)) {
                     const product = await Product.findById(line.product).select("mrp");
@@ -468,7 +475,7 @@ const parsePromises = (raw, total) => {
         promises.push({ amount, dueDate, status: "DUE" });
     }
     const sum = round2(promises.reduce((totalAmount, row) => totalAmount + row.amount, 0));
-    if (sum - total > 0.001) return { error: "Payment dates cannot add up to more than the order total" };
+    if (sum - total > 0.001) return { error: "Payment dates cannot add up to more than the amount still to collect" };
     return { promises, sum };
 };
 
@@ -479,7 +486,7 @@ const refreshPending = (order) => {
         .reduce((sum, row) => sum + Number(row.amount || 0), 0));
     const collectedEarlier = order.paymentMethod === "CASH" || (order.paymentMethod === "ONLINE" && order.razorpayPaymentId)
         ? total
-        : order.paymentMethod === "ADVANCE_COD"
+        : order.paymentMethod === "ADVANCE_COD" || order.paymentMethod === "COD_ONLINE"
             ? round2(order.advanceAmount || 0)
             : 0;
     order.pendingAmount = round2(Math.max(total - collectedEarlier - received, 0));
@@ -494,20 +501,32 @@ const placeOrder = async (req, res, next) => {
         const { order } = loaded;
 
         const method = String(req.body.paymentMethod || "").trim();
-        if (!["COD", "ONLINE"].includes(method)) {
-            return res.status(400).json({ success: false, message: "Choose cash on delivery or online" });
+        if (!["COD", "ONLINE", "COD_ONLINE"].includes(method)) {
+            return res.status(400).json({ success: false, message: "Choose COD, online, or COD + online" });
         }
         if (!order.lines.length) {
             return res.status(400).json({ success: false, message: "Add at least one product" });
         }
 
         const totals = moneyFor(order.lines);
-        const parsed = parsePromises(req.body.promises, totals.total);
+        let onlineAmount = 0;
+        if (method === "COD_ONLINE") {
+            onlineAmount = round2(req.body.onlineAmount);
+            if (!(onlineAmount > 0) || onlineAmount >= totals.total) {
+                return res.status(400).json({ success: false, message: "Online amount must be more than 0 and less than the bill" });
+            }
+        }
+        const stillToCollect = method === "COD_ONLINE" ? round2(totals.total - onlineAmount) : totals.total;
+        const parsed = parsePromises(req.body.promises, stillToCollect);
         if (parsed.error) return res.status(400).json({ success: false, message: parsed.error });
         clearSplit(order);
         order.paymentMethod = method;
         order.paymentPromises = parsed.promises;
-        order.pendingAmount = totals.total;
+        if (method === "COD_ONLINE") {
+            order.advanceAmount = onlineAmount;
+            order.advanceMode = "ONLINE";
+        }
+        order.pendingAmount = stillToCollect;
         order.set("paidAt", undefined);
         order.razorpayOrderId = "";
         order.razorpayPaymentId = "";
@@ -1457,7 +1476,7 @@ const getDashboard = async (req, res, next) => {
             bucket.total += row.total;
         });
 
-        const paymentNames = { COD: "COD", ONLINE: "Online", CASH: "Cash", ADVANCE_COD: "Advance + COD" };
+        const paymentNames = { COD: "COD", ONLINE: "Online", CASH: "Cash", ADVANCE_COD: "Advance + COD", COD_ONLINE: "COD + Online" };
         const payments = PAYMENT_METHODS.map((key) => {
             const row = (stats?.byPayment || []).find((item) => item._id === key);
             return { key, name: paymentNames[key], orders: row?.orders || 0, total: row?.total || 0 };
@@ -1468,7 +1487,7 @@ const getDashboard = async (req, res, next) => {
         const allStats = stats?.all?.[0] || { orders: 0, total: 0, gstTotal: 0, subtotal: 0 };
         const dispatchedOrders = (statuses.find((item) => item.key === "OUT_FOR_DELIVERY")?.orders || 0) + (statuses.find((item) => item.key === "DELIVERED")?.orders || 0);
         const dispatchedTotal = (statuses.find((item) => item.key === "OUT_FOR_DELIVERY")?.total || 0) + (statuses.find((item) => item.key === "DELIVERED")?.total || 0);
-        const claims = { DAMAGE: 0, EXPIRY: 0, RETURN: 0, OTHER: 0 };
+        const claims = { DAMAGE: 0, EXPIRY: 0, RETURN: 0, MISSING: 0, OTHER: 0 };
         (claimRows || []).forEach((row) => {
             if (Object.prototype.hasOwnProperty.call(claims, row._id)) claims[row._id] = row.quantity || 0;
         });
@@ -1556,7 +1575,7 @@ const getReimbursements = async (req, res, next) => {
         const from = String(req.query.from || "").trim();
         const to = String(req.query.to || "").trim();
         if (type && !REIMBURSE_TYPES.includes(type)) {
-            return res.status(400).json({ success: false, message: "Choose damage, expiry, return, or other" });
+            return res.status(400).json({ success: false, message: "Choose damage, expiry, return, or missing" });
         }
         const placedAt = reportRange(from, to);
         const scope = await orderScope(req.user);
@@ -1624,7 +1643,7 @@ const getReimbursements = async (req, res, next) => {
         });
 
         const [result] = await Order.aggregate(pipeline);
-        const summary = { DAMAGE: 0, EXPIRY: 0, RETURN: 0, OTHER: 0 };
+        const summary = { DAMAGE: 0, EXPIRY: 0, RETURN: 0, MISSING: 0, OTHER: 0 };
         (result?.totals || []).forEach((row) => {
             if (Object.prototype.hasOwnProperty.call(summary, row._id)) summary[row._id] = row.quantity;
         });
@@ -1738,7 +1757,7 @@ const getExpiryStock = async (req, res, next) => {
         const from = String(req.query.from || "").trim();
         const to = String(req.query.to || "").trim();
         if (type !== "ALL" && !REIMBURSE_TYPES.includes(type)) {
-            return res.status(400).json({ success: false, message: "Choose expiry, damage, return, other, or all" });
+            return res.status(400).json({ success: false, message: "Choose expiry, damage, return, missing, or all" });
         }
         const placedAt = reportRange(from, to);
         const scope = await orderScope(req.user);
@@ -1820,7 +1839,7 @@ const getExpiryStock = async (req, res, next) => {
             Order.aggregate(pipeline),
             HeldStock.aggregate([{ $group: { _id: "$type", quantity: { $sum: "$quantity" } } }]),
         ]);
-        const totals = { DAMAGE: { received: 0, given: 0, short: 0, value: 0 }, EXPIRY: { received: 0, given: 0, short: 0, value: 0 }, RETURN: { received: 0, given: 0, short: 0, value: 0 }, OTHER: { received: 0, given: 0, short: 0, value: 0 } };
+        const totals = { DAMAGE: { received: 0, given: 0, short: 0, value: 0 }, EXPIRY: { received: 0, given: 0, short: 0, value: 0 }, RETURN: { received: 0, given: 0, short: 0, value: 0 }, MISSING: { received: 0, given: 0, short: 0, value: 0 }, OTHER: { received: 0, given: 0, short: 0, value: 0 } };
         (result?.totals || []).forEach((row) => {
             if (totals[row._id]) {
                 totals[row._id] = {
@@ -1831,7 +1850,7 @@ const getExpiryStock = async (req, res, next) => {
                 };
             }
         });
-        const held = { DAMAGE: 0, EXPIRY: 0, RETURN: 0, OTHER: 0 };
+        const held = { DAMAGE: 0, EXPIRY: 0, RETURN: 0, MISSING: 0, OTHER: 0 };
         heldRows.forEach((row) => {
             if (Object.prototype.hasOwnProperty.call(held, row._id)) held[row._id] = row.quantity || 0;
         });

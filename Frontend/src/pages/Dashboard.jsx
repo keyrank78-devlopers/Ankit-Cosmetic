@@ -243,7 +243,7 @@ export function Dashboard() {
                     ["Return", data.claims?.RETURN, "bg-sky-50 text-sky-800"],
                     ["Damage", data.claims?.DAMAGE, "bg-rose-50 text-rose-800"],
                     ["Expiry", data.claims?.EXPIRY, "bg-amber-50 text-amber-800"],
-                    ["Other", data.claims?.OTHER, "bg-violet-50 text-violet-800"],
+                    ["Missing", data.claims?.MISSING, "bg-violet-50 text-violet-800"],
                   ].map(([label, quantity, tone]) => (
                     <div key={label} className={`rounded-xl p-3 ${tone}`}>
                       <p className="text-xs">{label}</p>

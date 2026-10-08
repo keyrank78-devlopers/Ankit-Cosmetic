@@ -31,7 +31,7 @@ const expirySchema = new mongoose.Schema(
         name: { type: String, required: true },
         image: { type: String, default: "" },
         quantity: { type: Number, required: true, min: 1 },
-        type: { type: String, enum: ["DAMAGE", "EXPIRY", "RETURN", "OTHER"], default: "EXPIRY" },
+        type: { type: String, enum: ["DAMAGE", "EXPIRY", "RETURN", "MISSING", "OTHER"], default: "EXPIRY" },
         mrp: { type: Number, min: 0 },
         givenProduct: { type: mongoose.Schema.Types.ObjectId, ref: "Product" },
         givenName: { type: String, trim: true, default: "" },
@@ -69,7 +69,7 @@ const orderSchema = new mongoose.Schema(
         schemeCommitmentMonths: { type: Number, min: 0 },
         expiryEnabled: { type: Boolean, default: false },
         expiryLines: { type: [expirySchema], default: [] },
-        paymentMethod: { type: String, enum: ["COD", "ONLINE", "CASH", "ADVANCE_COD"] },
+        paymentMethod: { type: String, enum: ["COD", "ONLINE", "CASH", "ADVANCE_COD", "COD_ONLINE"] },
         paymentPromises: {
             type: [{
                 amount: { type: Number, required: true, min: 0 },

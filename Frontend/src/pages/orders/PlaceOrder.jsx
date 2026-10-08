@@ -31,7 +31,7 @@ const lineView = (line, qtyDraft, priceDraft) => {
   const gst = round2(subtotal * ((Number(line.gstPercent) || 0) / 100));
   return { qtyText, safeQty, priceText, offer, unit, subtotal, gst };
 };
-const CLAIM_NAMES = { DAMAGE: "Damage", EXPIRY: "Expiry", RETURN: "Return", OTHER: "Other" };
+const CLAIM_NAMES = { DAMAGE: "Damage", EXPIRY: "Expiry", RETURN: "Return", MISSING: "Missing", OTHER: "Other" };
 const claimText = (line) => {
   const name = CLAIM_NAMES[line?.type] || "Expiry";
   return line?.type === "OTHER" && line.otherLabel ? `${name} (${line.otherLabel})` : name;
@@ -127,6 +127,7 @@ export function PlaceOrder() {
   const [form, setForm] = useState(emptyForm);
   const [order, setOrder] = useState(null);
   const [products, setProducts] = useState([]);
+  const [allProducts, setAllProducts] = useState([]);
   const [productSearch, setProductSearch] = useState("");
   const [stockLeft, setStockLeft] = useState({});
   const [schemes, setSchemes] = useState([]);
@@ -142,6 +143,7 @@ export function PlaceOrder() {
   const [addPrice, setAddPrice] = useState({});
   const [busy, setBusy] = useState(false);
   const [payChoice, setPayChoice] = useState("COD");
+  const [onlineAmount, setOnlineAmount] = useState("");
   const [promises, setPromises] = useState([]);
   const [paymentQr, setPaymentQr] = useState("");
 
@@ -179,6 +181,17 @@ export function PlaceOrder() {
     }, 300);
     return () => clearTimeout(timer);
   }, [productSearch, step]);
+
+  useEffect(() => {
+    if (step !== 3) return undefined;
+    let cancelled = false;
+    orderService.catalog("", 2000).then((res) => {
+      if (!cancelled) setAllProducts(res.data || []);
+    }).catch((error) => {
+      if (!cancelled) toast.error(errorText(error, "Failed to load products"));
+    });
+    return () => { cancelled = true; };
+  }, [step]);
 
   const lineFor = (productId) => order?.lines?.find((line) => line.product === productId);
 
@@ -385,24 +398,23 @@ export function PlaceOrder() {
           : Number(String(row.givenQuantity).trim()),
       }))
       .filter((row) => row.quantity > 0);
-    if (expiryOn && lines.some((row) => row.type === "OTHER") && !otherLabel.trim()) {
-      toast.error("Write what the other reimbursement is");
-      return;
-    }
     const overExpiry = lines.find((row) => {
       if (row.type !== "EXPIRY") return false;
       const line = (order.lines || []).find((item) => String(item.product) === String(row.productId));
+      const catalogItem = allProducts.find((item) => String(item._id) === String(row.productId));
       const giveId = String(row.givenProductId || row.productId);
-      const give = products.find((item) => String(item._id) === giveId)
+      const give = allProducts.find((item) => String(item._id) === giveId)
+        || products.find((item) => String(item._id) === giveId)
         || (String(line?.product) === giveId ? line : null);
-      const incomingMrp = Number(line?.mrp);
+      const incomingMrp = Number(line?.mrp ?? catalogItem?.mrp);
       const giveMrp = Number(give?.mrp);
       if (!Number.isFinite(incomingMrp) || !Number.isFinite(giveMrp)) return false;
       return round2(row.givenQuantity * giveMrp) > round2(row.quantity * incomingMrp);
     });
     if (overExpiry) {
       const line = (order.lines || []).find((item) => String(item.product) === String(overExpiry.productId));
-      toast.error(`Give amount cannot be more than the expiry amount for ${line?.name || "this product"}`);
+      const catalogItem = allProducts.find((item) => String(item._id) === String(overExpiry.productId));
+      toast.error(`Give amount cannot be more than the expiry amount for ${line?.name || catalogItem?.name || "this product"}`);
       return;
     }
     setBusy(true);
@@ -450,15 +462,22 @@ export function PlaceOrder() {
       toast.error("Enter the amount and date for each payment");
       return;
     }
+    const onlinePay = payChoice === "COD_ONLINE" ? round2(onlineAmount) : 0;
+    if (payChoice === "COD_ONLINE" && (!(onlinePay > 0) || onlinePay >= orderTotal)) {
+      toast.error("Online amount must be more than 0 and less than the bill");
+      return;
+    }
+    const stillToCollect = payChoice === "COD_ONLINE" ? round2(orderTotal - onlinePay) : orderTotal;
     const dated = round2(rows.reduce((sum, row) => sum + round2(row.amount), 0));
-    if (dated - orderTotal > 0.001) {
-      toast.error("Payment dates cannot add up to more than the order total");
+    if (dated - stillToCollect > 0.001) {
+      toast.error("Payment dates cannot add up to more than the COD amount");
       return;
     }
     setBusy(true);
     try {
       const res = await orderService.place(order._id, {
-        paymentMethod: payChoice === "ONLINE" ? "ONLINE" : "COD",
+        paymentMethod: payChoice,
+        onlineAmount: onlinePay,
         promises: rows.map((row) => ({ amount: round2(row.amount), dueDate: row.dueDate })),
       });
       toast.success(res.data.orderCode ? `Order placed · ${res.data.orderCode}` : "Order placed");
@@ -482,6 +501,7 @@ export function PlaceOrder() {
     setQtyDraft({});
     setAddQty({});
     setPayChoice("COD");
+    setOnlineAmount("");
     setPromises([]);
     setPaymentQr("");
     window.scrollTo({ top: 0, behavior: "smooth" });
@@ -514,7 +534,10 @@ export function PlaceOrder() {
     return [...map.values()];
   };
 
-  const expiryProducts = order?.lines || [];
+  const expiryProducts = allProducts.map((product) => {
+    const ordered = (order?.lines || []).find((line) => String(line.product) === String(product._id));
+    return { product: product._id, name: product.name, image: product.mainImage, mrp: product.mrp, quantity: ordered?.quantity };
+  });
 
   const datedTotal = round2(promises.reduce((sum, row) => sum + (round2(row.amount) || 0), 0));
 
@@ -850,7 +873,7 @@ export function PlaceOrder() {
         <div className="space-y-4 rounded-2xl border border-slate-200 bg-white p-5 shadow-sm">
           <div>
             <h2 className="text-lg font-medium text-slate-900">Reimbursement</h2>
-            <p className="text-sm text-slate-500">Choose yes, then a reason. Damage, return, other, and expiry each keep their own entries. Damage and expiry show the product MRP. This does not change the bill.</p>
+            <p className="text-sm text-slate-500">Choose yes, then a reason. Damage, return, missing, and expiry each keep their own entries. Damage, missing, and expiry show the product MRP. This does not change the bill.</p>
           </div>
           <div className="inline-flex rounded-lg border border-slate-200 p-1">
             <button type="button" onClick={() => setExpiryOn(false)} className={cn("rounded-md px-4 py-1.5 text-sm font-medium", !expiryOn ? "bg-indigo-600 text-white" : "text-slate-600")}>No</button>
@@ -864,28 +887,25 @@ export function PlaceOrder() {
                     <option value="DAMAGE">Damage</option>
                     <option value="EXPIRY">Expiry</option>
                     <option value="RETURN">Return</option>
-                    <option value="OTHER">Other</option>
+                    <option value="MISSING">Missing</option>
                   </select>
                 </Field>
-                {claimType === "OTHER" && (
-                  <Field label="What is it">
-                    <Input value={otherLabel} maxLength={80} placeholder="Write the reason" onChange={(event) => setOtherLabel(event.target.value)} />
-                  </Field>
-                )}
               </div>
               <div className="max-h-72 space-y-3 overflow-y-scroll overscroll-contain pr-1">
+                {!allProducts.length && <p className="text-sm text-slate-500">Loading products...</p>}
                 {expiryProducts.map((line) => {
                   const productId = String(line.product);
                   const row = claimRow(productId, claimType) || { quantity: "", note: "", givenProductId: "", givenQuantity: "" };
                   const qty = Number(row.quantity);
-                  const showPrice = claimType === "EXPIRY" || claimType === "DAMAGE";
+                  const showPrice = claimType === "EXPIRY" || claimType === "DAMAGE" || claimType === "MISSING";
                   const priceValue = showPrice && line.mrp != null && Number.isInteger(qty) && qty > 0
                     ? round2(qty * Number(line.mrp))
                     : null;
                   const giveId = row.givenProductId || productId;
                   const giveQtyText = row.givenQuantity != null ? row.givenQuantity : row.quantity;
                   const giveQty = Number(giveQtyText);
-                  const giveProduct = products.find((item) => String(item._id) === giveId)
+                  const giveProduct = allProducts.find((item) => String(item._id) === giveId)
+                    || products.find((item) => String(item._id) === giveId)
                     || (String(line.product) === giveId ? { _id: line.product, name: line.name, mainImage: line.image, mrp: line.mrp } : null);
                   const giveMrp = giveProduct?.mrp != null ? Number(giveProduct.mrp) : null;
                   const giveValue = giveMrp != null && Number.isInteger(giveQty) && giveQty >= 0 ? round2(giveQty * giveMrp) : null;
@@ -894,6 +914,7 @@ export function PlaceOrder() {
                   const giveOptions = [
                     ...new Map([
                       ...(order.lines || []).map((item) => [String(item.product), { id: String(item.product), name: item.name }]),
+                      ...allProducts.map((item) => [String(item._id), { id: String(item._id), name: item.name }]),
                       ...products.map((item) => [String(item._id), { id: String(item._id), name: item.name }]),
                     ]).values(),
                   ];
@@ -903,7 +924,7 @@ export function PlaceOrder() {
                         <Thumb src={line.image} alt={line.name} className="h-12 w-12 shrink-0 bg-white object-contain" />
                         <div className="min-w-0">
                           <p className="truncate text-sm font-medium text-slate-900">{line.name}</p>
-                          {claimType !== "EXPIRY" && <p className="text-xs text-slate-500">Ordered {line.quantity}</p>}
+                          {line.quantity != null && <p className="text-xs text-slate-500">Ordered {line.quantity}</p>}
                         </div>
                       </div>
                       <div className="mt-3 grid gap-3 sm:grid-cols-2">
@@ -920,7 +941,7 @@ export function PlaceOrder() {
                           </Field>
                         )}
                       </div>
-                      {claimType === "DAMAGE" && (
+                      {(claimType === "DAMAGE" || claimType === "MISSING") && (
                         <div className="mt-3">
                           <Field label="Note (optional)">
                             <Input maxLength={200} placeholder="Optional note" value={row.note} onChange={(event) => setClaimField(productId, claimType, { note: event.target.value })} />
@@ -957,10 +978,14 @@ export function PlaceOrder() {
                 <div className="space-y-2 rounded-xl border border-slate-200 bg-slate-50 p-3">
                   <p className="text-sm font-medium text-slate-900">Entries</p>
                   {claims.filter((row) => Number(row.quantity) > 0).map((row) => {
-                    const line = (order.lines || []).find((item) => String(item.product) === row.productId);
+                    const ordered = (order.lines || []).find((item) => String(item.product) === row.productId);
+                    const catalogItem = allProducts.find((item) => String(item._id) === row.productId);
+                    const line = ordered || (catalogItem ? { product: catalogItem._id, name: catalogItem.name, image: catalogItem.mainImage, mrp: catalogItem.mrp } : null);
                     const qty = Number(row.quantity);
                     const giveId = row.givenProductId || row.productId;
-                    const give = products.find((item) => String(item._id) === giveId) || (String(line?.product) === giveId ? { name: line.name, mainImage: line.image, mrp: line.mrp } : null);
+                    const give = allProducts.find((item) => String(item._id) === giveId)
+                      || products.find((item) => String(item._id) === giveId)
+                      || (String(line?.product) === giveId ? { name: line.name, mainImage: line.image, mrp: line.mrp } : null);
                     const giveQty = row.givenQuantity !== undefined && row.givenQuantity !== "" ? Number(row.givenQuantity) : Number(row.quantity);
                     return (
                       <div key={row.id} className="flex items-center gap-3 rounded-lg bg-white px-3 py-2">
@@ -969,7 +994,7 @@ export function PlaceOrder() {
                           <p className="text-sm font-medium text-slate-900">{line?.name}</p>
                           <p className="text-xs text-slate-500">
                             {CLAIM_NAMES[row.type]} · {qty}
-                            {(row.type === "EXPIRY" || row.type === "DAMAGE") && line?.mrp != null ? ` × MRP ${money.format(line.mrp)} = ${money.format(round2(qty * Number(line.mrp)))}` : ""}
+                            {(row.type === "EXPIRY" || row.type === "DAMAGE" || row.type === "MISSING") && line?.mrp != null ? ` × MRP ${money.format(line.mrp)} = ${money.format(round2(qty * Number(line.mrp)))}` : ""}
                             {row.note ? ` · ${row.note}` : ""}
                           </p>
                           {give ? (
@@ -1032,7 +1057,7 @@ export function PlaceOrder() {
               {order.expiryLines?.map((line) => {
                 const source = (order.lines || []).find((item) => String(item.product) === String(line.product));
                 const unit = line.mrp != null ? Number(line.mrp) : source?.mrp != null ? Number(source.mrp) : null;
-                const showPrice = (line.type === "EXPIRY" || line.type === "DAMAGE") && unit != null;
+                const showPrice = (line.type === "EXPIRY" || line.type === "DAMAGE" || line.type === "MISSING") && unit != null;
                 const giveValue = line.givenMrp != null ? round2(line.givenQuantity * line.givenMrp) : null;
                 return (
                   <div key={`${line.product}-${line.type}`} className="rounded-xl border border-slate-200 p-3">
@@ -1082,10 +1107,11 @@ export function PlaceOrder() {
                 <h3 className="text-sm font-medium text-slate-900">Payment</h3>
                 <p className="text-xs text-slate-500">Nothing is collected now. Online shows the QR. Add the dates and amounts the customer will pay. This does not change the bill.</p>
               </div>
-              <div className="grid gap-2 sm:grid-cols-2">
+              <div className="grid gap-2 sm:grid-cols-3">
                 {[
                   ["COD", "COD", "Full amount stays pending"],
                   ["ONLINE", "Online", "Show the QR, then place the order"],
+                  ["COD_ONLINE", "COD + Online", "Pay some online, the rest is COD"],
                 ].map(([id, label, hint]) => (
                   <button
                     key={id}
@@ -1103,13 +1129,25 @@ export function PlaceOrder() {
                 ))}
               </div>
 
-              {payChoice === "ONLINE" && (
-                <div className="flex justify-center rounded-xl border border-slate-200 bg-white p-4">
+              {payChoice === "COD_ONLINE" && (
+                <div className="grid gap-3 sm:grid-cols-2">
+                  <Field label="Online amount">
+                    <Input inputMode="decimal" placeholder="Amount to pay online" value={onlineAmount} disabled={busy} onChange={(event) => setOnlineAmount(event.target.value.replace(/[^\d.]/g, ""))} />
+                  </Field>
+                  <Field label="COD amount">
+                    <Input readOnly value={money.format(round2(Math.max(orderTotal - (round2(onlineAmount) || 0), 0)))} />
+                  </Field>
+                </div>
+              )}
+
+              {(payChoice === "ONLINE" || payChoice === "COD_ONLINE") && (
+                <div className="flex flex-col items-center rounded-xl border border-slate-200 bg-white p-4">
                   {paymentQr ? (
                     <img src={paymentQr} alt="Payment QR" className="h-52 w-52 object-contain" />
                   ) : (
                     <p className="py-10 text-sm text-slate-500">No payment QR saved yet.</p>
                   )}
+                  {payChoice === "COD_ONLINE" && <p className="mt-2 text-sm font-medium text-slate-900">Pay {money.format(round2(onlineAmount) || 0)} online</p>}
                 </div>
               )}
 
@@ -1135,8 +1173,8 @@ export function PlaceOrder() {
                   <span className="font-medium text-slate-900">{money.format(datedTotal)}</span>
                 </div>
                 <div className="flex justify-between text-sm font-semibold">
-                  <span>Still without a date</span>
-                  <span>{money.format(round2(Math.max(orderTotal - datedTotal, 0)))}</span>
+                  <span>{payChoice === "COD_ONLINE" ? "COD still without a date" : "Still without a date"}</span>
+                  <span>{money.format(round2(Math.max((payChoice === "COD_ONLINE" ? orderTotal - (round2(onlineAmount) || 0) : orderTotal) - datedTotal, 0)))}</span>
                 </div>
               </div>
             </div>

@@ -298,7 +298,7 @@ const shipOrder = async (order, userId) => {
     await syncProductStock(productIds);
 };
 
-const CLAIM_TYPES = ["DAMAGE", "EXPIRY", "RETURN", "OTHER"];
+const CLAIM_TYPES = ["DAMAGE", "EXPIRY", "RETURN", "MISSING", "OTHER"];
 
 const settleClaims = async (order, userId) => {
     const lines = (order.expiryLines || []).filter((line) => !line.stockSettled && CLAIM_TYPES.includes(line.type));

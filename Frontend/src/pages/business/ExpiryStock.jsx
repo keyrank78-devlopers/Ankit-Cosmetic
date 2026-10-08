@@ -14,7 +14,7 @@ const reasons = [
   { key: "EXPIRY", label: "Expiry" },
   { key: "DAMAGE", label: "Damage" },
   { key: "RETURN", label: "Return" },
-  { key: "OTHER", label: "Other" },
+  { key: "MISSING", label: "Missing" },
   { key: "ALL", label: "All reasons" },
 ];
 const emptyBucket = { received: 0, given: 0, short: 0, value: 0 };
@@ -27,8 +27,8 @@ export function ExpiryStock() {
   const type = params.get("type") || "EXPIRY";
   const [search, setSearch] = useState(params.get("search") || "");
   const [rows, setRows] = useState([]);
-  const [held, setHeld] = useState({ DAMAGE: 0, EXPIRY: 0, RETURN: 0, OTHER: 0 });
-  const [totals, setTotals] = useState({ DAMAGE: emptyBucket, EXPIRY: emptyBucket, RETURN: emptyBucket, OTHER: emptyBucket });
+  const [held, setHeld] = useState({ DAMAGE: 0, EXPIRY: 0, RETURN: 0, MISSING: 0 });
+  const [totals, setTotals] = useState({ DAMAGE: emptyBucket, EXPIRY: emptyBucket, RETURN: emptyBucket, MISSING: emptyBucket });
   const [loading, setLoading] = useState(true);
   const [totalPages, setTotalPages] = useState(1);
   const [total, setTotal] = useState(0);
@@ -63,12 +63,12 @@ export function ExpiryStock() {
         });
         if (cancelled) return;
         setRows(res.data || []);
-        setHeld({ DAMAGE: 0, EXPIRY: 0, RETURN: 0, OTHER: 0, ...(res.held || {}) });
+        setHeld({ DAMAGE: 0, EXPIRY: 0, RETURN: 0, MISSING: 0, ...(res.held || {}) });
         setTotals({
           DAMAGE: { ...emptyBucket, ...res.totals?.DAMAGE },
           EXPIRY: { ...emptyBucket, ...res.totals?.EXPIRY },
           RETURN: { ...emptyBucket, ...res.totals?.RETURN },
-          OTHER: { ...emptyBucket, ...res.totals?.OTHER },
+          MISSING: { ...emptyBucket, ...res.totals?.MISSING },
         });
         setTotal(res.pagination?.total || 0);
         setTotalPages(res.pagination?.pages || 1);
@@ -96,7 +96,7 @@ export function ExpiryStock() {
     { key: "EXPIRY", label: "Expiry held", tone: "text-amber-700" },
     { key: "DAMAGE", label: "Damage held", tone: "text-rose-700" },
     { key: "RETURN", label: "Return held", tone: "text-sky-700" },
-    { key: "OTHER", label: "Other held", tone: "text-slate-900" },
+    { key: "MISSING", label: "Missing held", tone: "text-slate-900" },
   ];
   const active = type === "ALL"
     ? Object.values(totals).reduce((sum, bucket) => ({

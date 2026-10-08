@@ -8,13 +8,13 @@ import { claimText, StatusBadge } from "./orderStatus.jsx";
 import { cn } from "../../utils/cn";
 import { Pager, pageSize } from "../../components/ui/Pager";
 
-const emptySummary = { DAMAGE: 0, EXPIRY: 0, RETURN: 0, OTHER: 0 };
+const emptySummary = { DAMAGE: 0, EXPIRY: 0, RETURN: 0, MISSING: 0 };
 const reasons = [
   { key: "", label: "All reasons" },
   { key: "EXPIRY", label: "Expiry" },
   { key: "DAMAGE", label: "Damage" },
   { key: "RETURN", label: "Return" },
-  { key: "OTHER", label: "Other" },
+  { key: "MISSING", label: "Missing" },
 ];
 const selectClass = "h-9 w-full rounded-md border border-slate-200 bg-white px-3 text-sm text-slate-700 shadow-sm focus:outline-none focus:ring-1 focus:ring-indigo-600";
 const when = new Intl.DateTimeFormat("en-IN", { day: "2-digit", month: "short", year: "numeric" });
@@ -87,14 +87,14 @@ export function ReimbursementReport() {
     { key: "EXPIRY", label: "Expiry", tone: "text-amber-700" },
     { key: "DAMAGE", label: "Damage", tone: "text-rose-700" },
     { key: "RETURN", label: "Return", tone: "text-sky-700" },
-    { key: "OTHER", label: "Other", tone: "text-slate-900" },
+    { key: "MISSING", label: "Missing", tone: "text-slate-900" },
   ];
 
   return (
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">Reimbursement report</h1>
-        <p className="mt-1 text-sm text-slate-500">Filter by expiry, damage, return, or other. The cards stay as the full totals.</p>
+        <p className="mt-1 text-sm text-slate-500">Filter by expiry, damage, return, or missing. The cards stay as the full totals.</p>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

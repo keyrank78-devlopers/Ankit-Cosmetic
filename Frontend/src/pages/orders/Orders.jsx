@@ -175,6 +175,7 @@ export function Orders() {
               <option value="ONLINE">Online</option>
               <option value="COD">COD</option>
               <option value="ADVANCE_COD">Advance + COD</option>
+              <option value="COD_ONLINE">COD + Online</option>
             </select>
           </Field>
           <Field label="Reimbursement">
@@ -250,7 +251,9 @@ export function Orders() {
                   </td>
                   <td className="px-4 py-4 align-top">
                     <p className="text-sm font-medium text-slate-900">{paymentLabel(order)}</p>
-                    {order.paymentMethod === "ADVANCE_COD" ? (
+                    {order.paymentMethod === "COD_ONLINE" ? (
+                      <p className="mt-1 text-xs text-slate-500">Online {money.format(paymentAmounts(order).advance)} · COD {money.format(Math.max((order.total || 0) - paymentAmounts(order).advance, 0))}</p>
+                    ) : order.paymentMethod === "ADVANCE_COD" ? (
                       <p className="mt-1 text-xs text-slate-500">Advance {money.format(paymentAmounts(order).advance)} · Pending {money.format(paymentAmounts(order).pending)}</p>
                     ) : order.paymentMethod === "COD" || (order.paymentMethod === "ONLINE" && !order.razorpayPaymentId) ? (
                       <p className="mt-1 text-xs text-slate-500">Pending {money.format(paymentAmounts(order).pending)}</p>

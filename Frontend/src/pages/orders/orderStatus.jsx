@@ -15,7 +15,7 @@ const NEXT = {
 
 export const displayStatus = (status) => (status === "PLACED" || status === "PENDING_CONFIRM" || status === "PENDING" ? "PENDING" : status);
 
-const CLAIM_NAMES = { DAMAGE: "Damage", EXPIRY: "Expiry", RETURN: "Return", OTHER: "Other" };
+const CLAIM_NAMES = { DAMAGE: "Damage", EXPIRY: "Expiry", RETURN: "Return", MISSING: "Missing", OTHER: "Other" };
 
 export const claimText = (line) => {
   const name = CLAIM_NAMES[line?.type] || "Expiry";

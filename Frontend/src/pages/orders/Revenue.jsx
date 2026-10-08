@@ -172,6 +172,7 @@ export function Revenue() {
               <option value="ONLINE">Online</option>
               <option value="COD">COD</option>
               <option value="ADVANCE_COD">Advance + COD</option>
+              <option value="COD_ONLINE">COD + Online</option>
             </select>
           </Field>
           <Field label="Search">
