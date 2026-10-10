@@ -4,7 +4,8 @@ const StockMovement = require("../models/StockMovement");
 const Product = require("../models/Product");
 const Order = require("../models/Order");
 const User = require("../models/User");
-const { recordEntry, updateEntry, deleteEntry } = require("../utils/stock");
+const { recordEntry, setOpeningStock, undoOpeningStock, updateEntry, deleteEntry } = require("../utils/stock");
+const { receiveStockSheet, buildSample, importStockSheet } = require("../utils/stockImport");
 
 const escapeRegex = (value) => String(value).replace(/[.*+?^${}()|[\]\\]/g, "\\$&");
 const dayKey = (date) => {
@@ -84,7 +85,10 @@ const getInventory = async (req, res, next) => {
                         net: {
                             $sum: {
                                 $cond: [
-                                    { $in: ["$type", ["SALE", "DAMAGE", "EXPIRY"]] },
+                                    { $or: [
+                                        { $in: ["$type", ["SALE", "DAMAGE", "EXPIRY"]] },
+                                        { $eq: ["$kind", "REDUCTION"] },
+                                    ] },
                                     { $multiply: ["$quantity", -1] },
                                     "$quantity",
                                 ],
@@ -187,17 +191,38 @@ const postInventoryEntry = async (req, res, next) => {
         if (!product || product.status === "INACTIVE") {
             return res.status(404).json({ success: false, message: "Product not found" });
         }
-        await recordEntry({
-            productId: product._id,
-            batchNo: req.body.batchNo,
-            caseSize: req.body.caseSize,
-            mfgDate: String(req.body.mfgDate || "").trim(),
-            expiryDate: String(req.body.expiryDate || "").trim(),
-            quantity: Number(req.body.quantity),
-            type,
-            note: req.body.note,
-            userId: req.user._id,
-        });
+        const rawOpening = req.body.openingStock;
+        const hasOpening = rawOpening !== undefined && rawOpening !== null && String(rawOpening).trim() !== "";
+        let openingApplied = [];
+        try {
+            if (hasOpening) {
+                openingApplied = await setOpeningStock({
+                    productId: product._id,
+                    opening: Number(rawOpening),
+                    userId: req.user._id,
+                });
+            }
+            await recordEntry({
+                productId: product._id,
+                batchNo: req.body.batchNo,
+                caseSize: req.body.caseSize,
+                mfgDate: String(req.body.mfgDate || "").trim(),
+                expiryDate: String(req.body.expiryDate || "").trim(),
+                quantity: Number(req.body.quantity),
+                type,
+                note: req.body.note,
+                userId: req.user._id,
+            });
+        } catch (error) {
+            if (openingApplied.length) {
+                try {
+                    await undoOpeningStock(product._id, openingApplied);
+                } catch (_) {
+                    /* keep the original save error */
+                }
+            }
+            throw error;
+        }
         res.status(201).json({ success: true, message: "Inventory updated" });
     } catch (error) {
         if (error.code === 11000) {
@@ -299,7 +324,18 @@ const getInventoryHistory = async (req, res, next) => {
             StockMovement.find(filter).sort({ at: -1, _id: -1 }).skip((page - 1) * limit).limit(limit).lean(),
             StockMovement.aggregate([
                 { $match: filter },
-                { $group: { _id: "$type", quantity: { $sum: "$quantity" } } },
+                { $group: {
+                    _id: "$type",
+                    quantity: {
+                        $sum: {
+                            $cond: [
+                                { $eq: ["$kind", "REDUCTION"] },
+                                { $multiply: ["$quantity", -1] },
+                                "$quantity",
+                            ],
+                        },
+                    },
+                } },
             ]),
             productDoc ? liveStock(productDoc) : null,
         ]);
@@ -330,7 +366,7 @@ const getInventoryHistory = async (req, res, next) => {
             _id: item._id,
             type: item.type,
             quantity: item.quantity,
-            effect: item.type === "SALE" || item.type === "DAMAGE" || item.type === "EXPIRY" ? -item.quantity : item.quantity,
+            effect: item.kind === "REPLACEMENT" || item.kind === "REDUCTION" || item.type === "SALE" || item.type === "DAMAGE" || item.type === "EXPIRY" ? -item.quantity : item.quantity,
             note: item.note || "",
             at: item.at,
             editable: manual.has(item.type) && !item.order,
@@ -379,4 +415,32 @@ const deleteInventoryEntry = async (req, res, next) => {
     }
 };
 
-module.exports = { getInventory, getInventoryHistory, postInventoryEntry, patchInventoryEntry, deleteInventoryEntry };
+const stockSample = async (req, res, next) => {
+    try {
+        const buffer = await buildSample();
+        res.setHeader("Content-Type", "application/vnd.openxmlformats-officedocument.spreadsheetml.sheet");
+        res.setHeader("Content-Disposition", "attachment; filename=\"stock-entry-sample.xlsx\"");
+        res.send(Buffer.from(buffer));
+    } catch (error) {
+        next(error);
+    }
+};
+
+const importStockFile = async (req, res, next) => {
+    try {
+        if (!req.file?.buffer?.length) {
+            return res.status(400).json({ success: false, message: "Choose an Excel file" });
+        }
+        const result = await importStockSheet(req.file.buffer, req.user._id);
+        const message = result.added
+            ? `${result.added} stock ${result.added === 1 ? "entry" : "entries"} added${result.skipped ? `, ${result.skipped} skipped` : ""}`
+            : "No stock entries were added";
+        res.status(result.added ? 201 : 400).json({ success: Boolean(result.added), message, data: result });
+    } catch (error) {
+        if (error.status) return res.status(error.status).json({ success: false, message: error.message });
+        if (error.code === 11000) return res.status(409).json({ success: false, message: "A batch in the file was saved at the same time. Upload it again" });
+        next(error);
+    }
+};
+
+module.exports = { getInventory, getInventoryHistory, postInventoryEntry, patchInventoryEntry, deleteInventoryEntry, receiveStockSheet, stockSample, importStockFile };

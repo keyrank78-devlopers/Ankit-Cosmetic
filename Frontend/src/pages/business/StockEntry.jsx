@@ -1,6 +1,6 @@
-import { useEffect, useState } from "react";
+import { useEffect, useRef, useState } from "react";
 import { useNavigate } from "react-router-dom";
-import { ArrowLeft, Search } from "lucide-react";
+import { ArrowLeft, Download, Search, Upload } from "lucide-react";
 import { Button } from "../../components/ui/Button";
 import { Input } from "../../components/ui/Input";
 import api from "../../services/api";
@@ -35,6 +35,11 @@ export function StockEntry() {
   const [totalPages, setTotalPages] = useState(1);
   const [selected, setSelected] = useState(null);
   const [entry, setEntry] = useState(emptyEntry);
+  const [openingStock, setOpeningStock] = useState("");
+  const [openingEdited, setOpeningEdited] = useState(false);
+  const [importing, setImporting] = useState(false);
+  const [importResult, setImportResult] = useState(null);
+  const fileRef = useRef(null);
 
   useEffect(() => {
     api.get("/public/categories/list", { params: { status: "ACTIVE", limit: 100 } })
@@ -83,9 +88,46 @@ export function StockEntry() {
     fetchProducts();
   }, [debouncedSearch, category, subCategory, page, limit]);
 
+  const downloadSample = async () => {
+    try {
+      const response = await api.get("/admin/inventory/import-sample", { responseType: "blob" });
+      const url = URL.createObjectURL(response.data);
+      const link = document.createElement("a");
+      link.href = url;
+      link.download = "stock-entry-sample.xlsx";
+      link.click();
+      URL.revokeObjectURL(url);
+    } catch (error) {
+      toast.error(error.response?.data?.message || "Could not download the sample");
+    }
+  };
+
+  const uploadSheet = async (event) => {
+    const file = event.target.files?.[0];
+    event.target.value = "";
+    if (!file) return;
+    const body = new FormData();
+    body.append("file", file);
+    try {
+      setImporting(true);
+      const response = await api.post("/admin/inventory/import", body);
+      setImportResult(response.data.data || null);
+      toast.success(response.data.message || "Stock uploaded");
+    } catch (error) {
+      const data = error.response?.data;
+      if (data?.data) setImportResult(data.data);
+      toast.error(data?.message || "Could not upload the Excel file");
+    } finally {
+      setImporting(false);
+    }
+  };
+
   const chooseProduct = (product) => {
+    const stock = Number(product.stock);
     setSelected(product);
     setEntry(emptyEntry);
+    setOpeningStock(Number.isFinite(stock) ? String(Math.max(0, Math.round(stock))) : "0");
+    setOpeningEdited(false);
   };
 
   const submitEntry = async (event) => {
@@ -96,11 +138,13 @@ export function StockEntry() {
     }
     try {
       setSaving(true);
-      await api.post("/admin/inventory/entry", {
+      const payload = {
         productId: selected._id,
         ...entry,
         quantity: Number(entry.quantity),
-      });
+      };
+      if (openingEdited && String(openingStock).trim() !== "") payload.openingStock = Number(openingStock);
+      await api.post("/admin/inventory/entry", payload);
       toast.success("Inventory updated");
       navigate("/dashboard/inventory");
     } catch (error) {
@@ -118,8 +162,40 @@ export function StockEntry() {
         </Button>
         <div>
           <h1 className="text-2xl font-bold tracking-tight text-slate-900">Stock entry</h1>
-          <p className="mt-1 text-sm text-slate-500">Pick a product from the list, then add the batch quantity. Update or delete an old entry from Stock history.</p>
+          <p className="mt-1 text-sm text-slate-500">Pick a product from the list, then add the batch quantity. Or upload an Excel of production entries.</p>
         </div>
+      </div>
+
+      <div className="rounded-xl border border-slate-200 bg-white p-4 shadow-sm">
+        <div className="flex flex-col gap-3 sm:flex-row sm:items-center sm:justify-between">
+          <div>
+            <p className="text-sm font-medium text-slate-900">Bulk production</p>
+            <p className="text-xs text-slate-500">Download the sample, fill up to 10,000 rows, then upload the Excel. Every row is production. Case size, opening stock, and note can be left blank.</p>
+          </div>
+          <div className="flex flex-wrap gap-2">
+            <Button type="button" variant="outline" onClick={downloadSample}>
+              <Download className="mr-2 h-4 w-4" />
+              Sample Excel
+            </Button>
+            <Button type="button" disabled={importing} onClick={() => fileRef.current?.click()}>
+              <Upload className="mr-2 h-4 w-4" />
+              {importing ? "Uploading..." : "Upload Excel"}
+            </Button>
+            <input ref={fileRef} type="file" accept=".xlsx,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" className="hidden" onChange={uploadSheet} />
+          </div>
+        </div>
+        {importResult && (
+          <div className="mt-3 text-sm text-slate-600">
+            <p>Added {importResult.added || 0}. Skipped {importResult.skipped || 0}.</p>
+            {(importResult.errors || []).length > 0 && (
+              <ul className="mt-2 max-h-32 space-y-1 overflow-y-auto text-xs text-red-600">
+                {importResult.errors.map((item) => (
+                  <li key={`${item.row}-${item.message}`}>Row {item.row}: {item.message}</li>
+                ))}
+              </ul>
+            )}
+          </div>
+        )}
       </div>
 
       <div className="grid gap-6 xl:grid-cols-[1.3fr_0.9fr]">
@@ -189,6 +265,22 @@ export function StockEntry() {
           <div>
             <h2 className="text-sm font-semibold text-slate-900">Batch details</h2>
             <p className="mt-1 text-sm text-slate-500">{selected ? selected.name : "Select a product from the list."}</p>
+          </div>
+          <div>
+            <label className="mb-1 block text-sm font-medium text-slate-700">Opening stock</label>
+            <Input
+              type="number"
+              min="0"
+              step="1"
+              value={openingStock}
+              placeholder={selected ? "0" : "Select a product"}
+              disabled={!selected || saving}
+              onChange={(event) => {
+                setOpeningStock(event.target.value);
+                setOpeningEdited(true);
+              }}
+            />
+            <p className="mt-1 text-xs text-slate-500">Filled from current sellable stock. Leave this number, or clear it, and opening stock stays as it is. Change the number to set a new opening. The batch quantity below is added on top.</p>
           </div>
           <div>
             <label className="mb-1 block text-sm font-medium text-slate-700">Type</label>

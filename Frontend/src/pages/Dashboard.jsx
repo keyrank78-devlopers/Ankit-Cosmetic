@@ -237,7 +237,7 @@ export function Dashboard() {
               </Panel>
             )}
             {seeClaims && (
-              <Panel title="Returns and claims" subtitle="Returned goods stay out of sellable stock. Replacements come out of main stock" action={<button type="button" onClick={() => navigate("/dashboard/inventory/expiry")} className="text-sm font-medium text-indigo-700">Expiry stock</button>}>
+              <Panel title="Returns and claims" subtitle="A return goes back into sellable stock. Damage, expiry, and missing stay out of it. What you give still comes out of main stock" action={<button type="button" onClick={() => navigate("/dashboard/inventory/expiry")} className="text-sm font-medium text-indigo-700">Expiry stock</button>}>
                 <div className="grid grid-cols-2 gap-3">
                   {[
                     ["Return", data.claims?.RETURN, "bg-sky-50 text-sky-800"],

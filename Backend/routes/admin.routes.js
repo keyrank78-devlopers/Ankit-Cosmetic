@@ -1045,10 +1045,12 @@ router.patch(
 router.patch("/products/status/:id", changeProductStatus);
 router.patch("/products/stock/:id", updateProductStock);
 
-const { getInventory, getInventoryHistory, postInventoryEntry, patchInventoryEntry, deleteInventoryEntry } = require("../controllers/inventory.controller");
+const { getInventory, getInventoryHistory, postInventoryEntry, patchInventoryEntry, deleteInventoryEntry, receiveStockSheet, stockSample, importStockFile } = require("../controllers/inventory.controller");
 router.get("/inventory/expiry", checkPermission("VIEW_INVENTORY", "MANAGE_INVENTORY", "EDIT_PRODUCTS"), getExpiryStock);
 router.get("/inventory", checkPermission("VIEW_INVENTORY", "MANAGE_INVENTORY", "EDIT_PRODUCTS"), getInventory);
 router.get("/inventory/history", checkPermission("VIEW_INVENTORY", "MANAGE_INVENTORY", "EDIT_PRODUCTS"), getInventoryHistory);
+router.get("/inventory/import-sample", checkPermission("MANAGE_INVENTORY", "EDIT_PRODUCTS"), stockSample);
+router.post("/inventory/import", checkPermission("MANAGE_INVENTORY", "EDIT_PRODUCTS"), receiveStockSheet, importStockFile);
 router.post("/inventory/entry", checkPermission("MANAGE_INVENTORY", "EDIT_PRODUCTS"), postInventoryEntry);
 router.patch("/inventory/entry/:id", checkPermission("MANAGE_INVENTORY", "EDIT_PRODUCTS"), patchInventoryEntry);
 router.delete("/inventory/entry/:id", checkPermission("MANAGE_INVENTORY", "EDIT_PRODUCTS"), deleteInventoryEntry);

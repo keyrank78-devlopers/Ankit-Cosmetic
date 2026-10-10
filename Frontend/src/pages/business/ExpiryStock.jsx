@@ -111,7 +111,7 @@ export function ExpiryStock() {
     <div className="space-y-6">
       <div>
         <h1 className="text-2xl font-bold tracking-tight text-slate-900">Expiry stock</h1>
-        <p className="mt-1 text-sm text-slate-500">Returned goods stay out of sellable stock. The same product given back comes out of main stock at MRP.</p>
+        <p className="mt-1 text-sm text-slate-500">Damage, expiry, and missing stay out of sellable stock. A return goes back into sellable stock. What you give still comes out of main stock.</p>
       </div>
 
       <div className="grid gap-3 sm:grid-cols-2 lg:grid-cols-4">

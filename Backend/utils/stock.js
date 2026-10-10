@@ -316,6 +316,7 @@ const settleClaims = async (order, userId) => {
     });
 
     const movements = [];
+    const inbound = [];
     try {
         for (const line of lines) {
             const giveProduct = line.givenProduct || line.product;
@@ -352,9 +353,38 @@ const settleClaims = async (order, userId) => {
             line.stockGiven = given;
             line.stockShort = remaining;
             line.stockSettled = true;
+            if (line.type !== "RETURN") continue;
+            const back = Number(line.quantity) || 0;
+            if (back < 1) continue;
+            let returnBatch = await Batch.findOne({ product: line.product, batchNo: "RETURN" });
+            if (!returnBatch) {
+                const today = new Date();
+                returnBatch = await Batch.create({
+                    product: line.product,
+                    batchNo: "RETURN",
+                    caseSize: "",
+                    mfgDate: today,
+                    expiryDate: new Date("2099-12-31"),
+                    onHand: 0,
+                    reserved: 0,
+                });
+            }
+            await Batch.updateOne({ _id: returnBatch._id }, { $inc: { onHand: back } });
+            inbound.push({
+                product: line.product,
+                batch: returnBatch._id,
+                type: "RETURN",
+                quantity: back,
+                order: order._id,
+                note: "Customer return added to sellable stock",
+                at: new Date(),
+                createdBy: userId,
+            });
         }
         if (movements.length) await StockMovement.insertMany(movements);
+        if (inbound.length) await StockMovement.insertMany(inbound);
         for (const line of lines) {
+            if (line.type === "RETURN") continue;
             await HeldStock.updateOne(
                 { product: line.product, type: line.type },
                 { $inc: { quantity: Number(line.quantity) || 0 } },
@@ -369,6 +399,12 @@ const settleClaims = async (order, userId) => {
                 updateOne: { filter: { _id: item.batch }, update: { $inc: { onHand: item.quantity } } },
             })));
             await StockMovement.deleteMany({ order: order._id, kind: "REPLACEMENT" });
+        }
+        if (inbound.length) {
+            await Batch.bulkWrite(inbound.map((item) => ({
+                updateOne: { filter: { _id: item.batch }, update: { $inc: { onHand: -item.quantity } } },
+            })));
+            await StockMovement.deleteMany({ order: order._id, type: "RETURN", kind: { $exists: false } });
         }
         lines.forEach((line) => {
             line.stockGiven = 0;
@@ -388,6 +424,16 @@ const reverseClaims = async (order) => {
             updateOne: { filter: { _id: item.batch }, update: { $inc: { onHand: item.quantity } } },
         })));
         await StockMovement.deleteMany({ _id: { $in: movements.map((item) => item._id) } });
+    }
+    const inbound = await StockMovement.find({ order: order._id, type: "RETURN", kind: { $exists: false } });
+    if (inbound.length) {
+        await Batch.bulkWrite(inbound.map((item) => ({
+            updateOne: {
+                filter: { _id: item.batch },
+                update: [{ $set: { onHand: { $max: [0, { $subtract: ["$onHand", item.quantity] }] } } }],
+            },
+        })));
+        await StockMovement.deleteMany({ _id: { $in: inbound.map((item) => item._id) } });
     }
     for (const line of lines) {
         const held = await HeldStock.findOne({ product: line.product, type: line.type });
@@ -418,6 +464,110 @@ const restoreShipped = async (order, userId) => {
         createdBy: userId,
     }))));
     await syncProductStock(shipped.map((line) => line.product));
+};
+
+const ensureOpeningBatch = async (productId) => {
+    let batch = await Batch.findOne({ product: productId, batchNo: "OPENING" });
+    if (batch) return batch;
+    const today = new Date();
+    return Batch.create({
+        product: productId,
+        batchNo: "OPENING",
+        caseSize: "",
+        mfgDate: today,
+        expiryDate: new Date("2099-12-31"),
+        onHand: 0,
+        reserved: 0,
+    });
+};
+
+const undoOpeningStock = async (productId, applied) => {
+    if (!applied?.length) return;
+    for (const item of applied) {
+        await Batch.updateOne({ _id: item.batchId }, { $inc: { onHand: -item.delta } });
+    }
+    await StockMovement.deleteMany({ _id: { $in: applied.map((item) => item.movementId) } });
+    await syncProductStock([productId]);
+};
+
+const setOpeningStock = async ({ productId, opening, userId }) => {
+    const target = Number(opening);
+    if (!Number.isInteger(target) || target < 0) {
+        const error = new Error("Opening stock must be a whole number, 0 or more");
+        error.status = 400;
+        throw error;
+    }
+    await absorbLegacyStock(productId, userId);
+    const batches = await Batch.find({ product: productId }).sort({ expiryDate: 1, batchNo: 1 });
+    const available = batches.reduce((sum, batch) => sum + (batch.onHand - batch.reserved), 0);
+    const delta = target - available;
+    if (!delta) return [];
+
+    const applied = [];
+    try {
+        if (delta > 0) {
+            const batch = await ensureOpeningBatch(productId);
+            await Batch.updateOne({ _id: batch._id }, { $inc: { onHand: delta } });
+            const movement = await StockMovement.create({
+                product: productId,
+                batch: batch._id,
+                type: "OPENING",
+                quantity: delta,
+                note: "Opening stock updated from stock entry",
+                at: new Date(),
+                createdBy: userId,
+            });
+            applied.push({ batchId: batch._id, delta, movementId: movement._id });
+        } else {
+            let need = -delta;
+            const ordered = [...batches].sort((a, b) => {
+                if (a.batchNo === "OPENING") return -1;
+                if (b.batchNo === "OPENING") return 1;
+                return new Date(a.expiryDate) - new Date(b.expiryDate);
+            });
+            const takes = [];
+            for (const batch of ordered) {
+                if (need <= 0) break;
+                const free = batch.onHand - batch.reserved;
+                if (free <= 0) continue;
+                const take = Math.min(free, need);
+                takes.push({ batch, take });
+                need -= take;
+            }
+            if (need > 0) {
+                const error = new Error("Opening stock can't go below quantity already reserved on orders");
+                error.status = 400;
+                throw error;
+            }
+            for (const item of takes) {
+                const updated = await Batch.updateOne(
+                    { _id: item.batch._id, $expr: { $gte: [{ $subtract: ["$onHand", "$reserved"] }, item.take] } },
+                    { $inc: { onHand: -item.take } }
+                );
+                if (!updated.modifiedCount) {
+                    const error = new Error("Opening stock changed while saving. Try again");
+                    error.status = 409;
+                    throw error;
+                }
+                const movement = await StockMovement.create({
+                    product: productId,
+                    batch: item.batch._id,
+                    type: "OPENING",
+                    kind: "REDUCTION",
+                    quantity: item.take,
+                    note: "Opening stock reduced from stock entry",
+                    at: new Date(),
+                    createdBy: userId,
+                });
+                applied.push({ batchId: item.batch._id, delta: -item.take, movementId: movement._id });
+            }
+        }
+        await syncProductStock([productId]);
+        return applied;
+    } catch (error) {
+        await undoOpeningStock(productId, applied);
+        throw error;
+    }
 };
 
 const recordEntry = async ({ productId, batchNo, caseSize, mfgDate, expiryDate, quantity, type, note, userId }) => {
@@ -486,7 +636,10 @@ const recordEntry = async ({ productId, batchNo, caseSize, mfgDate, expiryDate, 
 
 const MANUAL_TYPES = new Set(["OPENING", "PRODUCTION", "DAMAGE", "EXPIRY", "RETURN"]);
 
-const effectOf = (type, quantity) => (type === "SALE" || type === "DAMAGE" || type === "EXPIRY" ? -quantity : quantity);
+const effectOf = (type, quantity, kind) => {
+    if (kind === "REPLACEMENT" || kind === "REDUCTION") return -quantity;
+    return type === "SALE" || type === "DAMAGE" || type === "EXPIRY" ? -quantity : quantity;
+};
 
 const loadManualEntry = async (movementId) => {
     if (!mongoose.Types.ObjectId.isValid(movementId)) {
@@ -553,7 +706,7 @@ const updateEntry = async ({ movementId, quantity, note, caseSize, mfgDate, expi
         set.mfgDate = dayStamp(mfg);
         set.expiryDate = dayStamp(exp);
     }
-    const delta = effectOf(movement.type, quantity) - effectOf(movement.type, movement.quantity);
+    const delta = effectOf(movement.type, quantity, movement.kind) - effectOf(movement.type, movement.quantity, movement.kind);
     await applyOnHandDelta(movement.batch, delta, set);
     movement.quantity = quantity;
     if (note !== undefined) movement.note = String(note || "").trim().slice(0, 200);
@@ -563,7 +716,7 @@ const updateEntry = async ({ movementId, quantity, note, caseSize, mfgDate, expi
 
 const deleteEntry = async (movementId) => {
     const movement = await loadManualEntry(movementId);
-    const delta = -effectOf(movement.type, movement.quantity);
+    const delta = -effectOf(movement.type, movement.quantity, movement.kind);
     await applyOnHandDelta(movement.batch, delta);
     await StockMovement.deleteOne({ _id: movement._id });
     const stillUsed = await StockMovement.exists({ batch: movement.batch });
@@ -571,4 +724,4 @@ const deleteEntry = async (movementId) => {
     await syncProductStock([movement.product]);
 };
 
-module.exports = { releaseLines, allocate, shipOrder, restoreShipped, settleClaims, reverseClaims, recordEntry, updateEntry, deleteEntry, dayStamp };
+module.exports = { releaseLines, allocate, shipOrder, restoreShipped, settleClaims, reverseClaims, setOpeningStock, undoOpeningStock, recordEntry, updateEntry, deleteEntry, dayStamp, syncProductStock };
